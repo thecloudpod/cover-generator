@@ -412,15 +412,35 @@ def build_image_prompt(concept: str, variant: ImageVariant, provider: Provider =
     if variant == ImageVariant.SQUARE:
         dimension_guidance = """Square format (1:1 aspect ratio).
 
-FRAMING: Keep all important visual elements (characters, objects, focal points) in the upper 75% of the frame. The bottom quarter is reserved for title treatment in post-production. Background gradients can extend to edges.
+⚠️ CRITICAL FRAMING REQUIREMENT ⚠️
+The bottom 25% of the image will be covered by a text overlay bar in post-production.
 
-COMPOSITION: Center-weighted or slightly upper composition. Leave bottom area visually quiet."""
+MANDATORY COMPOSITION RULES:
+• Position ALL focal points, characters, and important objects in the UPPER 75% of the frame
+• Center of visual interest should be in the MIDDLE to UPPER-MIDDLE area
+• DO NOT place characters, faces, or key details in the bottom quarter
+• DO NOT center the composition vertically - shift everything UP
+• The bottom 25% should only contain: background gradients, ground/floor, or sky
+• Think of the image as having a "safe zone" in the top 3/4 only
+
+ACCEPTABLE in bottom 25%: Plain backgrounds, ground, sky, subtle gradients
+NOT ACCEPTABLE in bottom 25%: Characters, faces, text, logos, focal points, important objects"""
     else:  # SOCIAL
         dimension_guidance = """Horizontal landscape format (roughly 16:9 aspect ratio - WIDE not tall).
 
-FRAMING: Keep all important visual elements (characters, objects, focal points) in the upper 75% of the frame. The bottom quarter is reserved for title treatment in post-production. Background gradients can extend to edges.
+⚠️ CRITICAL FRAMING REQUIREMENT ⚠️
+The bottom 25% of the image will be covered by a text overlay bar in post-production.
 
-COMPOSITION: Center-to-upper composition with breathing room. Leave bottom area visually quiet."""
+MANDATORY COMPOSITION RULES:
+• Position ALL focal points, characters, and important objects in the UPPER 75% of the frame
+• Center of visual interest should be in the MIDDLE to UPPER-MIDDLE area
+• DO NOT place characters, faces, or key details in the bottom quarter
+• DO NOT center the composition vertically - shift everything UP
+• The bottom 25% should only contain: background gradients, ground/floor, or sky
+• Think of the image as having a "safe zone" in the top 3/4 only
+
+ACCEPTABLE in bottom 25%: Plain backgrounds, ground, sky, subtle gradients
+NOT ACCEPTABLE in bottom 25%: Characters, faces, text, logos, focal points, important objects"""
 
     # Add Bolt guidance only if user selected it
     bolt_guidance = ""
@@ -475,6 +495,8 @@ CRITICAL: Render ONLY the elements described in the concept above. Do not add un
 
 COMPOSITION REQUIREMENTS:
 {dimension_guidance}
+
+⚠️ FINAL REMINDER: Keep all focal points in the UPPER 75% of the frame. Bottom 25% will be covered by text overlay - leave it empty or use only plain backgrounds. Position characters and objects in the top 3/4 of the canvas.
 
 Generate a background image that visualizes this concept while maintaining The Cloud Pod's professional tech aesthetic.{model_emphasis}"""
 
@@ -1402,6 +1424,54 @@ def process_and_save(
 # ORCHESTRATION AND WORKFLOW
 # ============================================================================
 
+async def generate_single_variant(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    provider: Provider,
+    concept: str,
+    episode_num: int,
+    episode_title: str,
+    output_dir: Path,
+    variant_num: int,
+    semaphore: asyncio.Semaphore = None
+) -> Tuple[int, Optional[Path], Optional[Path]]:
+    """Generate a single variant (both square and social)
+
+    Returns tuple of (variant_num, square_path, social_path)
+    """
+
+    async with semaphore if semaphore else asyncio.Lock():
+        include_bolt = True  # Always include Bolt
+        include_hosts = variant_num >= 3  # Hosts only in variants 3 and 4
+        character_label = "bolt+hosts" if include_hosts else "bolt-only"
+        title_slug = slugify_title(episode_title)
+
+        print(f"  🎨 {provider.value.capitalize()} variant {variant_num}/4 ({character_label})...")
+
+        if provider == Provider.OPENAI:
+            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.OPENAI, include_bolt, include_hosts)
+            base_image_bytes = await retry_with_backoff(generate_image_openai, session, api_key, prompt, ImageVariant.SQUARE, concept, include_bolt, include_hosts)
+        else:  # GEMINI
+            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.GEMINI, include_bolt, include_hosts)
+            base_image_bytes = await retry_with_backoff(generate_image_gemini, session, api_key, prompt, ImageVariant.SQUARE, concept, include_bolt, include_hosts)
+
+        if not base_image_bytes:
+            print(f"  ⚠️  {provider.value.capitalize()} variant {variant_num} generation failed")
+            return (variant_num, None, None)
+
+        # Save square variant
+        filename = f"{episode_num}-{title_slug}-{provider.value}-{variant_num}.jpg"
+        output_path = output_dir / filename
+        square_path = output_path if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path) else None
+
+        # Reuse same image for social variant (different cropping/processing)
+        filename_social = f"{episode_num}-{title_slug}-social-{provider.value}-{variant_num}.jpg"
+        output_path_social = output_dir / filename_social
+        social_path = output_path_social if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SOCIAL, output_path_social) else None
+
+        return (variant_num, square_path, social_path)
+
+
 async def generate_all_variants(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -1417,43 +1487,26 @@ async def generate_all_variants(
     """
 
     results = {ImageVariant.SQUARE: [], ImageVariant.SOCIAL: []}
-    title_slug = slugify_title(episode_title)
 
-    # Generate 4 variants:
-    # 1-2: Bolt only (2 interpretations)
-    # 3-4: Bolt + hosts (2 interpretations)
-    for variant_num in range(1, 5):  # 1, 2, 3, 4
-        # First two variants: Bolt only
-        # Last two variants: Bolt + hosts
-        include_bolt = True  # Always include Bolt
-        include_hosts = variant_num >= 3  # Hosts only in variants 3 and 4
+    # OpenAI: Generate 2 at a time (rate limit friendly)
+    # Gemini: Generate all 4 concurrently (faster)
+    concurrency = 2 if provider == Provider.OPENAI else 4
+    semaphore = asyncio.Semaphore(concurrency)
 
-        character_label = "bolt+hosts" if include_hosts else "bolt-only"
-        print(f"  🎨 {provider.value.capitalize()} variant {variant_num}/4 ({character_label})...")
+    # Generate all 4 variants concurrently (with controlled concurrency)
+    tasks = [
+        generate_single_variant(session, api_key, provider, concept, episode_num, episode_title, output_dir, variant_num, semaphore)
+        for variant_num in range(1, 5)
+    ]
 
-        if provider == Provider.OPENAI:
-            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.OPENAI, include_bolt, include_hosts)
-            base_image_bytes = await retry_with_backoff(generate_image_openai, session, api_key, prompt, ImageVariant.SQUARE, concept, include_bolt, include_hosts)
-        else:  # GEMINI
-            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.GEMINI, include_bolt, include_hosts)
-            base_image_bytes = await retry_with_backoff(generate_image_gemini, session, api_key, prompt, ImageVariant.SQUARE, concept, include_bolt, include_hosts)
+    variant_results = await asyncio.gather(*tasks)
 
-        if base_image_bytes:
-            # Save square variant
-            filename = f"{episode_num}-{title_slug}-{provider.value}-{variant_num}.jpg"
-            output_path = output_dir / filename
-            success = process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path)
-            if success:
-                results[ImageVariant.SQUARE].append(output_path)
-
-            # Reuse same image for social variant (different cropping/processing)
-            filename_social = f"{episode_num}-{title_slug}-social-{provider.value}-{variant_num}.jpg"
-            output_path_social = output_dir / filename_social
-            success_social = process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SOCIAL, output_path_social)
-            if success_social:
-                results[ImageVariant.SOCIAL].append(output_path_social)
-        else:
-            print(f"  ⚠️  {provider.value.capitalize()} variant {variant_num} generation failed")
+    # Collect results in order
+    for variant_num, square_path, social_path in sorted(variant_results, key=lambda x: x[0]):
+        if square_path:
+            results[ImageVariant.SQUARE].append(square_path)
+        if social_path:
+            results[ImageVariant.SOCIAL].append(social_path)
 
     return results
 
