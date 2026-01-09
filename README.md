@@ -8,14 +8,16 @@ Automated podcast cover image generator using OpenAI and Google Gemini AI APIs.
 - **Generate More Concepts**: Add additional concepts anytime with optional keyword steering to guide creative direction
 - **Keyword Steering**: Provide keywords (e.g., "space theme", "retro style", "Bolt-focused") to influence concept generation
 - **Dual Provider Support**: Both OpenAI (gpt-image-1) and Google Gemini generate images from your selected concept
-- **Multiple Image Variants**: Each provider generates 2 different interpretations of the selected concept (4 square + 4 social = 8 images total)
+- **Automatic Character Variants**: Each provider automatically generates 4 versions:
+  - 2 images with Bolt only
+  - 2 images with Bolt + all four hosts
 - **Multiple Formats**: Generates both square (3000×3000) podcast covers and social media (1200×630) variants
+- **Total Output**: 16 images per episode (8 square + 8 social: 4 from OpenAI, 4 from Gemini)
 - **Professional Overlay Bar**: Semi-transparent bar at bottom with grouped episode number and title for clean, professional look
 - **Character Consistency**: Bolt mascot passed as reference image; hosts described via detailed text prompts (names, hair, beards)
 - **Scene Consistency**: Each provider generates one base image, reused for both square and social variants with different layouts
 - **Rate Limiting**: Handles API rate limits automatically
 - **Creative & Varied**: Concepts use literal interpretations, visual puns, and wordplay based on the episode title
-- **Character Integration**: Bolt (mascot) and silhouetted hosts automatically used when they enhance the concept
 - **Interactive Refinement**: Regenerate all concepts (0), generate more (M), refine specific concepts (R#), or exit (X) at any time
 - **Concept Refinement**: Ask AI to adjust a concept (e.g., "make it funnier" or "add more Bolt")
 - **Protected Visual Area**: AI generation avoids bottom area reserved for title bar, keeping focal points clear
@@ -60,9 +62,12 @@ The script will:
    - `M` = Generate MORE concepts (you can add 3+ concepts with optional keyword steering)
    - `R#` = Refine a specific concept (e.g., `R3` to refine concept 3)
    - `X` = Exit
-3. Both providers generate images based on your selected/refined concept
-4. Generate 4 images total per provider (2 variants × 2 formats = 8 total)
-5. Save them to `output/337/`
+3. Both providers automatically generate 4 character variants each:
+   - 2 images with Bolt only
+   - 2 images with Bolt + all four hosts
+4. Each variant generated in both square (3000×3000) and social (1200×630) formats
+5. Total output: 16 images (8 square + 8 social)
+6. Save all images to `output/` directory
 
 ### Advanced Options
 
@@ -89,17 +94,33 @@ All files are saved to a flat `output/` directory with descriptive filenames:
 
 ```
 output/
-├── 337-we-were-right-gemini.jpg          # 3000×3000 podcast cover (Gemini)
-├── 337-we-were-right-social-gemini.jpg   # 1200×630 social media (Gemini)
-├── 337-we-were-right-openai.jpg          # 3000×3000 podcast cover (OpenAI)
-├── 337-we-were-right-social-openai.jpg   # 1200×630 social media (OpenAI)
-└── 337-concepts.json                     # Saved concepts for reference
+├── 337-we-were-right-gemini-1.jpg          # Gemini variant 1 (Bolt only) - 3000×3000
+├── 337-we-were-right-gemini-2.jpg          # Gemini variant 2 (Bolt only) - 3000×3000
+├── 337-we-were-right-gemini-3.jpg          # Gemini variant 3 (Bolt + hosts) - 3000×3000
+├── 337-we-were-right-gemini-4.jpg          # Gemini variant 4 (Bolt + hosts) - 3000×3000
+├── 337-we-were-right-social-gemini-1.jpg   # Gemini variant 1 social - 1200×630
+├── 337-we-were-right-social-gemini-2.jpg   # Gemini variant 2 social - 1200×630
+├── 337-we-were-right-social-gemini-3.jpg   # Gemini variant 3 social - 1200×630
+├── 337-we-were-right-social-gemini-4.jpg   # Gemini variant 4 social - 1200×630
+├── 337-we-were-right-openai-1.jpg          # OpenAI variant 1 (Bolt only) - 3000×3000
+├── 337-we-were-right-openai-2.jpg          # OpenAI variant 2 (Bolt only) - 3000×3000
+├── 337-we-were-right-openai-3.jpg          # OpenAI variant 3 (Bolt + hosts) - 3000×3000
+├── 337-we-were-right-openai-4.jpg          # OpenAI variant 4 (Bolt + hosts) - 3000×3000
+├── 337-we-were-right-social-openai-1.jpg   # OpenAI variant 1 social - 1200×630
+├── 337-we-were-right-social-openai-2.jpg   # OpenAI variant 2 social - 1200×630
+├── 337-we-were-right-social-openai-3.jpg   # OpenAI variant 3 social - 1200×630
+├── 337-we-were-right-social-openai-4.jpg   # OpenAI variant 4 social - 1200×630
+└── 337-concepts.json                       # Saved concepts for reference
 ```
 
 **Filename Format:**
-- Square (podcast): `{episode}-{title-keywords}-{provider}.jpg`
-- Social media: `{episode}-{title-keywords}-social-{provider}.jpg`
+- Square (podcast): `{episode}-{title-keywords}-{provider}-{1-4}.jpg`
+- Social media: `{episode}-{title-keywords}-social-{provider}-{1-4}.jpg`
 - Concepts: `{episode}-concepts.json`
+
+**Variant Guide:**
+- Variants 1-2: Bolt only (two different interpretations)
+- Variants 3-4: Bolt + all four hosts (two different interpretations)
 
 ## Example
 
@@ -137,15 +158,15 @@ The AI will generate additional concepts that incorporate your keywords while st
 
 ### Generated Output
 
-Generates 8 high-quality images per episode (2 interpretations per provider):
-- `337-we-were-right-gemini-1.jpg` - First Gemini interpretation (3000×3000)
-- `337-we-were-right-gemini-2.jpg` - Second Gemini interpretation (3000×3000)
-- `337-we-were-right-social-gemini-1.jpg` - First Gemini social variant (1200×630)
-- `337-we-were-right-social-gemini-2.jpg` - Second Gemini social variant (1200×630)
-- `337-we-were-right-openai-1.jpg` - First OpenAI interpretation (3000×3000)
-- `337-we-were-right-openai-2.jpg` - Second OpenAI interpretation (3000×3000)
-- `337-we-were-right-social-openai-1.jpg` - First OpenAI social variant (1200×630)
-- `337-we-were-right-social-openai-2.jpg` - Second OpenAI social variant (1200×630)
+Generates 16 high-quality images per episode (4 character variants per provider):
+
+**Gemini (8 images):**
+- Variants 1-2: Bolt only (2 interpretations × 2 formats = 4 images)
+- Variants 3-4: Bolt + hosts (2 interpretations × 2 formats = 4 images)
+
+**OpenAI (8 images):**
+- Variants 1-2: Bolt only (2 interpretations × 2 formats = 4 images)
+- Variants 3-4: Bolt + hosts (2 interpretations × 2 formats = 4 images)
 
 Each image includes:
 - Creative visualization inspired by episode title

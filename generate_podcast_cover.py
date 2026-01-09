@@ -821,39 +821,6 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                 sys.exit(0)
 
 
-def choose_characters(concept: str) -> Tuple[bool, bool]:
-    """Ask user whether to include hosts (Bolt always included)
-
-    Args:
-        concept: The selected concept text
-
-    Returns:
-        Tuple of (include_bolt, include_hosts)
-    """
-    print("\n🎬 CASTING COUCH")
-    print("=" * 70)
-    print(f"Concept: {concept[:100]}{'...' if len(concept) > 100 else ''}")
-    print("\nℹ️  Bolt (mascot) will always appear in the scene.")
-    print("\nShould the four hosts also appear in this scene?")
-    print("  1 = Bolt only")
-    print("  2 = Bolt + all four hosts")
-
-    while True:
-        try:
-            choice = input("\nYour choice (1-2): ").strip()
-
-            if choice == '1':
-                print("✓ Bolt will appear in the scene")
-                return True, False
-            elif choice == '2':
-                print("✓ Bolt and all four hosts will appear in the scene")
-                return True, True
-            else:
-                print("Please enter 1 or 2")
-
-        except (ValueError, KeyboardInterrupt):
-            print("\nPlease enter 1 or 2")
-            continue
 
 
 # ============================================================================
@@ -1442,18 +1409,27 @@ async def generate_all_variants(
     concept: str,
     episode_num: int,
     episode_title: str,
-    output_dir: Path,
-    include_bolt: bool = False,
-    include_hosts: bool = False
+    output_dir: Path
 ) -> Dict[ImageVariant, List[Path]]:
-    """Generate 2 different images for both square and social variants from one provider"""
+    """Generate 4 different images: 2 with Bolt only, 2 with Bolt + hosts
+
+    Returns both square and social variants for each (8 images total per provider)
+    """
 
     results = {ImageVariant.SQUARE: [], ImageVariant.SOCIAL: []}
     title_slug = slugify_title(episode_title)
 
-    # Generate 2 different images from the same concept
-    for variant_num in range(1, 3):  # 1 and 2
-        print(f"  🎨 {provider.value.capitalize()} variant {variant_num}/2...")
+    # Generate 4 variants:
+    # 1-2: Bolt only (2 interpretations)
+    # 3-4: Bolt + hosts (2 interpretations)
+    for variant_num in range(1, 5):  # 1, 2, 3, 4
+        # First two variants: Bolt only
+        # Last two variants: Bolt + hosts
+        include_bolt = True  # Always include Bolt
+        include_hosts = variant_num >= 3  # Hosts only in variants 3 and 4
+
+        character_label = "bolt+hosts" if include_hosts else "bolt-only"
+        print(f"  🎨 {provider.value.capitalize()} variant {variant_num}/4 ({character_label})...")
 
         if provider == Provider.OPENAI:
             prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.OPENAI, include_bolt, include_hosts)
@@ -1486,14 +1462,19 @@ async def generate_with_providers(
     episode_num: int,
     episode_title: str,
     selected_concept: str,
-    providers: List[Provider],
-    include_bolt: bool = True,
-    include_hosts: bool = False
+    providers: List[Provider]
 ) -> Dict[Provider, Dict[ImageVariant, List[Path]]]:
-    """Generate 2 images per provider (4 square + 4 social total)"""
+    """Generate 4 images per provider: 2 with Bolt only, 2 with Bolt + hosts
+
+    Total output: 8 square + 8 social images per provider
+    """
 
     print(f"\n🖼️  Generating images...")
     print("=" * 70)
+    print("Each provider will generate:")
+    print("  • 2 images with Bolt only")
+    print("  • 2 images with Bolt + all four hosts")
+    print("  • Each in both square (3000×3000) and social (1200×630) formats")
 
     all_results = {}
 
@@ -1523,9 +1504,7 @@ async def generate_with_providers(
                 selected_concept,
                 episode_num,
                 episode_title,
-                output_dir,
-                include_bolt,
-                include_hosts
+                output_dir
             )
 
             all_results[provider] = results
@@ -1608,11 +1587,17 @@ def print_summary(
             size = "3000×3000" if variant == ImageVariant.SQUARE else "1200×630"
             if paths and len(paths) > 0:
                 for i, path in enumerate(paths, 1):
-                    print(f"  ✓ Variant {i}: {path} ({size})")
+                    # Variants 1-2 are Bolt only, 3-4 are Bolt + hosts
+                    character_info = "Bolt only" if i <= 2 else "Bolt + hosts"
+                    print(f"  ✓ Variant {i} ({character_info}): {path.name} ({size})")
             else:
                 print(f"  ✗ {variant.value} generation failed")
 
     print("\n" + "=" * 70)
+    print("\nVariant guide:")
+    print("  • Variants 1-2: Bolt only (2 different interpretations)")
+    print("  • Variants 3-4: Bolt + all four hosts (2 different interpretations)")
+    print("=" * 70)
 
 
 # ============================================================================
@@ -1772,11 +1757,8 @@ async def main():
     # Save concepts
     save_concepts(args.episode, args.title, concepts, selected_index)
 
-    # Phase 1.5: Choose characters (Casting Couch)
-    # Bolt is always included, user decides about hosts
-    include_bolt, include_hosts = choose_characters(selected_concept)
-
     # Phase 2 & 3: Generate and process images
+    # Each provider generates 4 variants: 2 with Bolt only, 2 with Bolt + hosts
     # Process Gemini first (faster), then OpenAI
     providers = []
     if args.provider == 'both':
@@ -1797,9 +1779,7 @@ async def main():
         args.episode,
         args.title,
         selected_concept,
-        providers,
-        include_bolt,
-        include_hosts
+        providers
     )
 
     # Print summary
