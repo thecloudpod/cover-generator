@@ -398,8 +398,16 @@ Most concepts should NOT include characters. Focus on clever object-based or env
 Return ONLY one sentence describing the specific visual scene based on "{episode_title}":"""
 
 
-def build_image_prompt(concept: str, variant: ImageVariant, provider: Provider = None) -> str:
-    """Build detailed prompt for image generation with optional model-specific emphasis"""
+def build_image_prompt(concept: str, variant: ImageVariant, provider: Provider = None, include_bolt: bool = False, include_hosts: bool = False) -> str:
+    """Build detailed prompt for image generation with optional model-specific emphasis
+
+    Args:
+        concept: The visual concept description
+        variant: Square or social media format
+        provider: OpenAI or Gemini (for model-specific emphasis)
+        include_bolt: Whether to include Bolt character (user choice)
+        include_hosts: Whether to include the four hosts (user choice)
+    """
 
     if variant == ImageVariant.SQUARE:
         dimension_guidance = """Square format (1:1 aspect ratio).
@@ -414,9 +422,9 @@ FRAMING: Keep all important visual elements (characters, objects, focal points) 
 
 COMPOSITION: Center-to-upper composition with breathing room. Leave bottom area visually quiet."""
 
-    # Check if Bolt is mentioned in the concept
+    # Add Bolt guidance only if user selected it
     bolt_guidance = ""
-    if "bolt" in concept.lower():
+    if include_bolt:
         bolt_guidance = """
 
 CHARACTER REFERENCE - "Bolt" (The Cloud Pod mascot):
@@ -425,13 +433,13 @@ Reference image provided. Match this character exactly:
 - Maintain friendly expression, simple rounded shapes, flat illustration style
 - Same proportions and design as reference"""
 
-    # Check if hosts are mentioned
+    # Add hosts guidance only if user selected it
     hosts_guidance = ""
-    if any(word in concept.lower() for word in ["host", "hosts", "podcast hosts", "people", "silhouetted"]):
+    if include_hosts:
         hosts_guidance = """
 
 SCENE COMPOSITION - The Four Podcast Hosts:
-The four tech professional hosts appear in this scene (along with Bolt if mentioned).
+The four tech professional hosts appear in this scene (along with Bolt if included).
 
 THE FOUR HOSTS - Render as distinct, recognizable team in modern flat illustration:
 
@@ -813,6 +821,41 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                 sys.exit(0)
 
 
+def choose_characters(concept: str) -> Tuple[bool, bool]:
+    """Ask user whether to include hosts (Bolt always included)
+
+    Args:
+        concept: The selected concept text
+
+    Returns:
+        Tuple of (include_bolt, include_hosts)
+    """
+    print("\n🎬 CASTING COUCH")
+    print("=" * 70)
+    print(f"Concept: {concept[:100]}{'...' if len(concept) > 100 else ''}")
+    print("\nℹ️  Bolt (mascot) will always appear in the scene.")
+    print("\nShould the four hosts also appear in this scene?")
+    print("  1 = Bolt only")
+    print("  2 = Bolt + all four hosts")
+
+    while True:
+        try:
+            choice = input("\nYour choice (1-2): ").strip()
+
+            if choice == '1':
+                print("✓ Bolt will appear in the scene")
+                return True, False
+            elif choice == '2':
+                print("✓ Bolt and all four hosts will appear in the scene")
+                return True, True
+            else:
+                print("Please enter 1 or 2")
+
+        except (ValueError, KeyboardInterrupt):
+            print("\nPlease enter 1 or 2")
+            continue
+
+
 # ============================================================================
 # IMAGE GENERATION FUNCTIONS
 # ============================================================================
@@ -822,18 +865,17 @@ async def generate_image_openai(
     api_key: str,
     prompt: str,
     variant: ImageVariant,
-    concept: str = ""
+    concept: str = "",
+    include_bolt: bool = False,
+    include_hosts: bool = False
 ) -> Optional[bytes]:
     """Generate image using OpenAI GPT Image with reference images via edit endpoint"""
 
     print(f"  🎨 OpenAI generating {variant.value} variant...")
 
-    has_bolt = "bolt" in concept.lower()
-    has_hosts = any(word in concept.lower() for word in ["host", "hosts", "podcast hosts", "people", "silhouetted"])
-
     # Use edit endpoint ONLY if we have Bolt (actual reference image)
     # Hosts are described via text, so they don't require edit endpoint
-    use_edit_endpoint = has_bolt
+    use_edit_endpoint = include_bolt
 
     if use_edit_endpoint:
         # Use images.edit endpoint with reference images
@@ -851,14 +893,14 @@ async def generate_image_openai(
 
         # Add reference images using array syntax (image[])
         # Only add Bolt reference - hosts are described via text prompts
-        if has_bolt:
+        if include_bolt:
             bolt_ref = load_bolt_reference()
             if bolt_ref:
                 bolt_bytes = base64.b64decode(bolt_ref)
                 form.add_field('image[]', bolt_bytes, filename='bolt.png', content_type='image/png')
                 print("  📸 Using Bolt reference image")
 
-        if has_hosts:
+        if include_hosts:
             print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
 
         endpoint = "https://api.openai.com/v1/images/edits"
@@ -897,7 +939,7 @@ async def generate_image_openai(
 
     else:
         # Use generate endpoint (no Bolt reference image)
-        if has_hosts:
+        if include_hosts:
             print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
 
         payload = {
@@ -953,7 +995,9 @@ async def generate_image_gemini(
     api_key: str,
     prompt: str,
     variant: ImageVariant,
-    concept: str = ""
+    concept: str = "",
+    include_bolt: bool = False,
+    include_hosts: bool = False
 ) -> Optional[bytes]:
     """Generate image using Google Gemini with optional reference images"""
 
@@ -963,11 +1007,8 @@ async def generate_image_gemini(
     parts = []
     reference_text_parts = []
 
-    has_bolt = "bolt" in concept.lower()
-    has_hosts = any(word in concept.lower() for word in ["host", "hosts", "podcast hosts", "people", "silhouetted"])
-
-    # Load Bolt reference if mentioned
-    if has_bolt:
+    # Load Bolt reference if user selected it
+    if include_bolt:
         bolt_reference_b64 = load_bolt_reference()
         if bolt_reference_b64:
             parts.append({
@@ -980,7 +1021,7 @@ async def generate_image_gemini(
             print("  📸 Using Bolt reference image")
 
     # Use text descriptions for hosts instead of reference images
-    if has_hosts:
+    if include_hosts:
         print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
 
     # Build final prompt with references
@@ -1401,7 +1442,9 @@ async def generate_all_variants(
     concept: str,
     episode_num: int,
     episode_title: str,
-    output_dir: Path
+    output_dir: Path,
+    include_bolt: bool = False,
+    include_hosts: bool = False
 ) -> Dict[ImageVariant, List[Path]]:
     """Generate 2 different images for both square and social variants from one provider"""
 
@@ -1413,11 +1456,11 @@ async def generate_all_variants(
         print(f"  🎨 {provider.value.capitalize()} variant {variant_num}/2...")
 
         if provider == Provider.OPENAI:
-            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.OPENAI)
-            base_image_bytes = await retry_with_backoff(generate_image_openai, session, api_key, prompt, ImageVariant.SQUARE, concept)
+            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.OPENAI, include_bolt, include_hosts)
+            base_image_bytes = await retry_with_backoff(generate_image_openai, session, api_key, prompt, ImageVariant.SQUARE, concept, include_bolt, include_hosts)
         else:  # GEMINI
-            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.GEMINI)
-            base_image_bytes = await retry_with_backoff(generate_image_gemini, session, api_key, prompt, ImageVariant.SQUARE, concept)
+            prompt = build_image_prompt(concept, ImageVariant.SQUARE, Provider.GEMINI, include_bolt, include_hosts)
+            base_image_bytes = await retry_with_backoff(generate_image_gemini, session, api_key, prompt, ImageVariant.SQUARE, concept, include_bolt, include_hosts)
 
         if base_image_bytes:
             # Save square variant
@@ -1443,7 +1486,9 @@ async def generate_with_providers(
     episode_num: int,
     episode_title: str,
     selected_concept: str,
-    providers: List[Provider]
+    providers: List[Provider],
+    include_bolt: bool = True,
+    include_hosts: bool = False
 ) -> Dict[Provider, Dict[ImageVariant, List[Path]]]:
     """Generate 2 images per provider (4 square + 4 social total)"""
 
@@ -1478,7 +1523,9 @@ async def generate_with_providers(
                 selected_concept,
                 episode_num,
                 episode_title,
-                output_dir
+                output_dir,
+                include_bolt,
+                include_hosts
             )
 
             all_results[provider] = results
@@ -1725,6 +1772,10 @@ async def main():
     # Save concepts
     save_concepts(args.episode, args.title, concepts, selected_index)
 
+    # Phase 1.5: Choose characters (Casting Couch)
+    # Bolt is always included, user decides about hosts
+    include_bolt, include_hosts = choose_characters(selected_concept)
+
     # Phase 2 & 3: Generate and process images
     # Process Gemini first (faster), then OpenAI
     providers = []
@@ -1746,7 +1797,9 @@ async def main():
         args.episode,
         args.title,
         selected_concept,
-        providers
+        providers,
+        include_bolt,
+        include_hosts
     )
 
     # Print summary
