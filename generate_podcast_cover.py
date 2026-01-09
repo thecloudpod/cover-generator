@@ -381,15 +381,19 @@ APPROACH - How to interpret titles literally:
 • Create SPECIFIC details (not vague "tech vibes" but concrete physical objects, readable text, tangible props)
 • Exaggerate for HUMOR (impossible proportions, absurd scales, playful contradictions)
 
+CONCEPT VARIETY:
+• Many strong concepts focus on OBJECTS, ENVIRONMENTS, or ABSTRACT VISUALS without any characters
+• Minimalist concepts (empty server rack, floating cloud, literal interpretation of title words) are often the most effective
+• Abstract/environmental concepts are encouraged
+• ONLY include characters if they genuinely enhance the specific visual pun or story
+
 IMPORTANT: Do NOT reuse visual elements from other episodes. Each concept must be completely original based on THIS episode's title.{previous_context}{keyword_guidance}
 
-CHARACTERS AVAILABLE (use when they enhance the story):
-• Bolt - cute blue cloud robot with yellow lightning bolt chest, headphones, antenna
-• The Four Hosts (ALL 4 shown together if used):
-  - Jonathan: dark hair, clean-shaven, fuller build, friendly lead energy
-  - Justin: completely bald head, silver-gray goatee, robust frame, sage presence
-  - Matthew: horseshoe hair pattern (bald top, brown sides/back), scruffy full brown beard, slim athletic build
-  - Ryan: shortish golden-brown wavy hair, darker brown goatee, medium build, creative energy
+OPTIONAL CHARACTERS (use sparingly, only when truly beneficial):
+• Bolt - cloud robot mascot (use only if robot/mascot fits the concept)
+• The Four Hosts - podcast team (use only if concept requires people/team interaction)
+
+Most concepts should NOT include characters. Focus on clever object-based or environmental visual metaphors first.
 
 Return ONLY one sentence describing the specific visual scene based on "{episode_title}":"""
 
