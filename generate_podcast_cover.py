@@ -322,13 +322,23 @@ BASE_STYLE_PROMPT = """Create a playful, professional podcast cover background w
 ILLUSTRATION STYLE - Modern flat vector aesthetic:
 - Visual style reference: Think Kurzgesagt, Slack marketing illustrations, or modern tech editorial art
 - Bold shapes with clean edges and smooth gradients
-- Render specific objects and characters that are described in the concept
+- Simple geometric body shapes for characters (rectangles, rounded forms)
+- Minimal facial features with maximum personality (dots for eyes, simple curves for mouths)
 - Playful proportions and exaggerated scale for comedic effect
 - Soft shadows and depth through color variation, not harsh lighting
+
+CHARACTER DESIGN PRINCIPLES (when characters appear):
+- Distinctive silhouettes - recognizable even in black shadow
+- Simple geometric shapes for bodies (readable at any size)
+- Consistent proportions - hosts are similar scale to each other
+- Color-coded for quick identification (each character has signature color)
+- Each character has signature pose/gesture that expresses personality
+- Clean separation - no overlapping characters, clear breathing room
 
 COLOR PALETTE:
 - Primary: Blues (#0066FF), cloud theme colors
 - Accent: White, light grays, strategic pops of color (yellow for Bolt's lightning bolt)
+- Character color-coding: Jonathan=light blue, Justin=gray, Matthew=warm brown/orange, Ryan=teal
 - Vibrant but professional - saturated blues, clean whites, purposeful color choices
 - Use color to enhance humor and guide the eye
 
@@ -336,7 +346,7 @@ COMPOSITION & FRAMING:
 - Primary focal point in center-to-upper area with clear visual hierarchy
 - Embrace negative space - don't fill every corner
 - Breathing room around characters and key objects
-- Characters shown as distinct stylized figures with recognizable hair/facial hair patterns
+- Characters shown as distinct stylized figures with recognizable visual signatures
 - Foreground-midground-background depth using size and color saturation
 
 TEXT IN SCENE:
@@ -412,77 +422,138 @@ def build_image_prompt(concept: str, variant: ImageVariant, provider: Provider =
     if variant == ImageVariant.SQUARE:
         dimension_guidance = """Square format (1:1 aspect ratio).
 
-⚠️ CRITICAL FRAMING REQUIREMENT ⚠️
-The bottom 25% of the image will be covered by a text overlay bar in post-production.
+COMPOSITION FRAMING (important for final output):
+A text overlay bar will appear in the lower portion of the final image. Compose with visual weight in the upper 2/3 to 3/4 of the frame - this creates dynamic upward energy and ensures focal points remain visible.
 
-MANDATORY COMPOSITION RULES:
-• Position ALL focal points, characters, and important objects in the UPPER 75% of the frame
-• Center of visual interest should be in the MIDDLE to UPPER-MIDDLE area
-• DO NOT place characters, faces, or key details in the bottom quarter
-• DO NOT center the composition vertically - shift everything UP
-• The bottom 25% should only contain: background gradients, ground/floor, or sky
-• Think of the image as having a "safe zone" in the top 3/4 only
+Place your main subjects, characters, and key visual elements in the middle to upper-middle area. The lower quarter works beautifully for environmental grounding: floors, clouds, horizon lines, gradient backgrounds, or atmospheric elements that support the scene above.
 
-ACCEPTABLE in bottom 25%: Plain backgrounds, ground, sky, subtle gradients
-NOT ACCEPTABLE in bottom 25%: Characters, faces, text, logos, focal points, important objects"""
+Think: "Hero shot" or "magazine cover" composition - subject prominent in upper portion, environment supporting below."""
     else:  # SOCIAL
         dimension_guidance = """Horizontal landscape format (roughly 16:9 aspect ratio - WIDE not tall).
 
-⚠️ CRITICAL FRAMING REQUIREMENT ⚠️
-The bottom 25% of the image will be covered by a text overlay bar in post-production.
+COMPOSITION FRAMING (important for final output):
+A text overlay bar will appear in the lower portion of the final image. Compose with visual weight in the upper 2/3 to 3/4 of the frame - this creates dynamic upward energy and ensures focal points remain visible.
 
-MANDATORY COMPOSITION RULES:
-• Position ALL focal points, characters, and important objects in the UPPER 75% of the frame
-• Center of visual interest should be in the MIDDLE to UPPER-MIDDLE area
-• DO NOT place characters, faces, or key details in the bottom quarter
-• DO NOT center the composition vertically - shift everything UP
-• The bottom 25% should only contain: background gradients, ground/floor, or sky
-• Think of the image as having a "safe zone" in the top 3/4 only
+Place your main subjects, characters, and key visual elements in the middle to upper-middle area. The lower quarter works beautifully for environmental grounding: floors, clouds, horizon lines, gradient backgrounds, or atmospheric elements that support the scene above.
 
-ACCEPTABLE in bottom 25%: Plain backgrounds, ground, sky, subtle gradients
-NOT ACCEPTABLE in bottom 25%: Characters, faces, text, logos, focal points, important objects"""
+Think: "Hero shot" or "magazine cover" composition - subject prominent in upper portion, environment supporting below."""
 
     # Add Bolt guidance only if user selected it
     bolt_guidance = ""
     if include_bolt:
         bolt_guidance = """
 
-CHARACTER REFERENCE - "Bolt" (The Cloud Pod mascot):
-Reference image provided. Match this character exactly:
-- Bright saturated blue (#0066FF) cloud-shaped body with yellow lightning bolt chest
-- Maintain friendly expression, simple rounded shapes, flat illustration style
-- Same proportions and design as reference"""
+BOLT - The Cloud Pod Mascot (reference image provided - match exactly):
+
+CHARACTER DESIGN:
+Body Shape: Puffy cloud form with rounded edges, roughly square proportions when at rest
+Body Color: Bright electric blue (#0066FF) - solid, no gradients on main body
+Chest Icon: Bold yellow lightning bolt (zigzag shape, pointing downward)
+Face: Simple friendly features - dot eyes (dark blue), curved smile line
+Accessories: Small rounded headphones on sides, single antenna on top with ball tip
+Style: Clean flat vector shapes, matte finish, modern illustration aesthetic
+
+PERSONALITY & POSE:
+Expression: Always friendly and approachable, enthusiastic energy
+Signature Gestures: Floating/bouncing, pointing with cloud appendages, excited poses
+Scale: Roughly 60-70% the height of human hosts when appearing together
+Consistency: Bolt's core design (blue color, lightning bolt orientation) stays identical across all scenes
+
+RENDERING PRIORITY: Match the reference image design exactly - this character must be instantly recognizable across all episodes."""
 
     # Add hosts guidance only if user selected it
     hosts_guidance = ""
     if include_hosts:
         hosts_guidance = """
 
-SCENE COMPOSITION - The Four Podcast Hosts:
-The four tech professional hosts appear in this scene (along with Bolt if included).
+THE FOUR CLOUD POD HOSTS - Character Design Consistency Guide
 
-THE FOUR HOSTS - Render as distinct, recognizable team in modern flat illustration:
+Illustration Style: Modern flat vector (Kurzgesagt/Slack aesthetic)
+Key Principle: DISTINCTIVE SILHOUETTES + COLOR CODING + VISUAL SIGNATURES
 
-Jonathan: Dark hair, clean-shaven smooth face, fuller solid build. Fresh welcoming energy.
+SHARED DESIGN LANGUAGE:
+• Simple geometric body shapes (rounded rectangles for torsos)
+• Minimal facial features with personality (simple eyes, expressive mouths)
+• Tech-casual professional attire (each has signature outfit)
+• Similar scale to each other, all standing roughly same height
+• Light skin tone, simple flat color rendering
 
-Justin: Completely bald smooth head, silver-gray goatee (chin/mouth area), robust frame. Distinguished sage.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Matthew: Horseshoe hair pattern - bald on top with brown hair around sides and back. Scruffy full brown beard (fuller than Justin/Ryan's goatees). Slim athletic build, always smiling. Energetic optimist.
+CHARACTER 1 - JONATHAN "The Welcoming Lead"
+HAIR: Dark brown, slightly wavy, medium length with side part (full head of hair)
+FACE: Clean-shaven smooth face, round friendly features, warm smile
+BUILD: Fuller/broad rectangular body shape, solid presence (tallest overall impression)
+OUTFIT: Light blue button-down shirt (sleeves rolled to elbows), khaki pants
+SIGNATURE COLOR: Light blue (#5B9BD5) - appears in shirt and accents
+SIGNATURE POSE: Upright posture, welcoming hand gestures (waving, pointing, presenting)
+PERSONALITY: Open body language, leading the group, friendly approachable energy
 
-Ryan: Shortish wavy golden-brown hair, darker brown goatee (chin/mouth area, similar coverage to Justin). Medium build. Thoughtful creative presence.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-VISUAL KEYS:
-- Hair is the primary identifier: Justin=bald, Matthew=horseshoe, Jonathan=full dark, Ryan=wavy golden-brown
-- Facial hair: Matthew has full beard; Justin and Ryan have goatees (Justin=gray, Ryan=brown)
-- All light-skinned, professional attire, cohesive team aesthetic
-- Each must be recognizable from their hair/facial hair signature"""
+CHARACTER 2 - JUSTIN "The Distinguished Sage"
+HAIR: Completely bald head (smooth dome, subtle highlights for dimension)
+FACIAL HAIR: Silver-gray goatee (covers chin and upper lip only, neat and trimmed)
+BUILD: Robust/solid rectangular shape, broad shoulders, strong presence
+OUTFIT: Gray blazer over black t-shirt, dark jeans, smart-casual
+SIGNATURE COLOR: Gray (#808080) - appears in blazer and overall palette
+SIGNATURE POSE: Thoughtful stance - hand on chin, crossed arms, grounded stable posture
+PERSONALITY: Wise mentor energy, contemplative, authoritative but approachable
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CHARACTER 3 - MATTHEW "The Energetic Optimist"
+HAIR: Horseshoe pattern - bald shiny dome on top, brown hair wraps around sides and back from ear to ear (render as "C" shape when viewed from front)
+FACIAL HAIR: Full scruffy brown beard (covers cheeks, chin, jawline, connects to side hair)
+BUILD: Slimmer/athletic rectangular shape, more vertical proportions, lean
+OUTFIT: Warm brown or orange polo shirt with rolled sleeves, casual pants
+SIGNATURE COLOR: Warm brown/orange (#D97B3E) - appears in shirt
+SIGNATURE POSE: Dynamic animated gestures, mid-motion, energetic pointing or jumping
+PERSONALITY: Always smiling, enthusiastic energy, most animated of the group
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CHARACTER 4 - RYAN "The Creative Thinker"
+HAIR: Shortish wavy golden-brown hair with natural volume and texture (full head, tousled)
+FACIAL HAIR: Darker brown goatee (covers chin and upper lip, similar coverage to Justin but brown)
+BUILD: Medium balanced rectangular shape, average proportions
+OUTFIT: Teal/turquoise crew-neck sweater or henley, modern casual
+SIGNATURE COLOR: Teal (#4AAAA5) - appears in shirt/sweater
+SIGNATURE POSE: Slightly angled stance, thoughtful gestures (looking at objects, contemplating)
+PERSONALITY: Creative contemplation, often interacting with tech objects or screens
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+VISUAL IDENTIFICATION SYSTEM:
+Primary ID: Hair pattern (Justin=bald, Matthew=horseshoe/bald top, Jonathan=full dark, Ryan=wavy golden-brown)
+Secondary ID: Facial hair (Matthew=full beard, Justin=gray goatee, Ryan=brown goatee, Jonathan=clean)
+Tertiary ID: Signature color (blue, gray, orange, teal)
+Quaternary ID: Build (Jonathan=broad, Justin=solid, Matthew=lean, Ryan=balanced)
+
+GROUP COMPOSITION (when all 4 appear together):
+• Standard order left-to-right: Jonathan → Justin → Matthew → Ryan
+• Spacing: Clear breathing room between each character, no overlap
+• Scale: All roughly similar height, similar size to each other
+• Arrangement: Arc, line, or informal cluster (avoid rigid lineup unless concept calls for it)
+• Interaction: Characters react to scene elements or look at shared focal point
+• With Bolt: Mascot appears in center or floating above, roughly 60-70% of host height
+
+CONSISTENCY CHECKLIST:
+✓ Can you identify each host by silhouette alone?
+✓ Is each character's signature color visible in their outfit?
+✓ Are the four hair patterns clearly distinct? (full, bald, horseshoe, wavy)
+✓ Do facial hair patterns match? (none, gray goatee, full beard, brown goatee)
+✓ Are they in recognizable left-to-right order when in group?
+✓ Does each pose match their personality archetype?
+
+RENDERING PRIORITY: These four characters must be instantly recognizable across all episodes through their visual signatures."""
 
     # Model-specific style emphasis
     model_emphasis = ""
     if provider == Provider.OPENAI:
-        model_emphasis = "\n\nSTYLE EMPHASIS: Prioritize clean flat illustration with bold shapes and smooth color gradients. Avoid photorealistic rendering."
+        model_emphasis = "\n\nOPENAI MODEL OPTIMIZATION:\n• Prioritize clean flat illustration with bold shapes and smooth color gradients\n• Leverage strong facial expression capabilities - show personality through simple expressive faces\n• Use lighting and depth to separate characters while maintaining flat aesthetic\n• Consistent proportions are key - maintain character scale relationships\n• Avoid photorealistic rendering - stay in illustration style"
     elif provider == Provider.GEMINI:
-        model_emphasis = "\n\nSTYLE EMPHASIS: Match the exact visual style and character designs from any reference images provided. Maintain consistency with provided examples."
+        model_emphasis = "\n\nGEMINI MODEL OPTIMIZATION:\n• Match exact visual style and character designs from reference images provided\n• Emphasize geometric shape language - clean simple forms\n• Strong on color consistency - use signature colors to distinguish characters\n• Test silhouettes - characters should be recognizable in black shadow\n• Maintain consistent character design across entire scene"
 
     return f"""{BASE_STYLE_PROMPT}
 
@@ -495,8 +566,6 @@ CRITICAL: Render ONLY the elements described in the concept above. Do not add un
 
 COMPOSITION REQUIREMENTS:
 {dimension_guidance}
-
-⚠️ FINAL REMINDER: Keep all focal points in the UPPER 75% of the frame. Bottom 25% will be covered by text overlay - leave it empty or use only plain backgrounds. Position characters and objects in the top 3/4 of the canvas.
 
 Generate a background image that visualizes this concept while maintaining The Cloud Pod's professional tech aesthetic.{model_emphasis}"""
 
