@@ -32,10 +32,17 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# OpenAI Endpoints - Latest Models
 OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 OPENAI_IMAGE_ENDPOINT = "https://api.openai.com/v1/images/generations"
-GEMINI_TEXT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
+OPENAI_CHAT_MODEL = "gpt-5.2"  # Latest reasoning model with thinking
+OPENAI_IMAGE_MODEL = "gpt-image-1.5"  # Latest DALL-E with 5-reference support
+
+# Gemini Endpoints - Gemini 3 Models
+GEMINI_TEXT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent"
+GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent"
+GEMINI_TEXT_MODEL = "gemini-3-flash-preview"  # Latest flash with thinking_level
+GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview"  # Nano Banana Pro - 4K with up to 14 references
 
 # Image Dimensions
 SQUARE_SIZE = (3000, 3000)  # Podcast cover format
@@ -262,39 +269,117 @@ def load_bolt_reference() -> Optional[str]:
         return None
 
 
-def load_host_references() -> List[str]:
-    """Load all host images and convert to base64 for API reference"""
-    host_refs = []
+def load_host_references() -> List[Dict[str, str]]:
+    """Load all host images with metadata for 5-reference strategy
+
+    Returns list of dicts with 'name', 'data' (base64), 'role', 'priority'
+    Ordered by priority for reference hierarchy (Gemini 3 / OpenAI multi-reference)
+    """
     hosts_dir = SCRIPT_DIR / "Hosts"
 
+    # Define reference hierarchy - priority order matters for identity locking
+    reference_order = [
+        {"filename": "bolt.png", "name": "Bolt", "role": "Primary mascot reference (canonical)", "priority": 1},
+        {"filename": "Jonathan Baker.png", "name": "Jonathan", "role": "Host 1 - Face and proportions reference", "priority": 2},
+        {"filename": "Justin Brodley.jpg", "name": "Justin", "role": "Host 2 - Face and proportions reference", "priority": 3},
+        {"filename": "Matthew Kohn.jpeg", "name": "Matthew", "role": "Host 3 - Face and proportions reference", "priority": 4},
+        {"filename": "Ryan Lucas.jpeg", "name": "Ryan", "role": "Host 4 - Face and proportions reference", "priority": 5},
+    ]
+
+    loaded_refs = []
+
     try:
-        # Load all host images (jpg, jpeg, png) - sorted for consistency
-        host_files = []
-        for host_file in hosts_dir.glob("*"):
-            if host_file.suffix.lower() in ['.jpg', '.jpeg', '.png'] and host_file.name != 'bolt.png':
-                host_files.append(host_file)
+        for ref_spec in reference_order:
+            ref_path = hosts_dir / ref_spec["filename"]
 
-        # Sort by name for consistent ordering
-        host_files.sort(key=lambda x: x.name)
-
-        print(f"  📋 Loading host reference files: {[f.name for f in host_files]}")
-
-        for host_file in host_files:
-            # Validate file size before loading
-            file_size = host_file.stat().st_size
-            if file_size > MAX_IMAGE_SIZE:
-                logger.warning(f"Host image {host_file.name} too large ({file_size / 1024 / 1024:.1f}MB), skipping")
+            if not ref_path.exists():
+                logger.warning(f"Reference image not found: {ref_spec['filename']}")
                 continue
 
-            with open(host_file, 'rb') as f:
-                image_data = f.read()
-                host_refs.append(base64.b64encode(image_data).decode('utf-8'))
+            # Validate file size
+            file_size = ref_path.stat().st_size
+            if file_size > MAX_IMAGE_SIZE:
+                logger.warning(f"{ref_spec['filename']} too large ({file_size / 1024 / 1024:.1f}MB), skipping")
+                continue
 
-        print(f"  ✓ Loaded {len(host_refs)} host reference images")
-        return host_refs
+            with open(ref_path, 'rb') as f:
+                image_data = f.read()
+                loaded_refs.append({
+                    "name": ref_spec["name"],
+                    "data": base64.b64encode(image_data).decode('utf-8'),
+                    "role": ref_spec["role"],
+                    "priority": ref_spec["priority"],
+                    "filename": ref_spec["filename"]
+                })
+
+        if loaded_refs:
+            print(f"  ✓ Loaded {len(loaded_refs)} reference images in priority order:")
+            for ref in loaded_refs:
+                print(f"    {ref['priority']}. {ref['name']} - {ref['role']}")
+
+        return loaded_refs
     except (OSError, IOError) as e:
-        logger.warning(f"Could not load host reference images: {e}")
+        logger.warning(f"Could not load reference images: {e}")
         return []
+
+
+def build_reference_hierarchy_instructions(references: List[Dict[str, str]], include_bolt: bool, include_hosts: bool) -> str:
+    """Build PIXEL PRIORITY MODE instructions for multi-reference image generation"""
+    if not references or (not include_bolt and not include_hosts):
+        return ""
+
+    # Filter references based on what's included
+    active_refs = [ref for ref in references
+                   if (ref["name"] == "Bolt" and include_bolt) or (ref["name"] != "Bolt" and include_hosts)]
+
+    ref_list = "\n".join(f"Image {ref['priority']}: {ref['name']} - {ref['role']}" for ref in active_refs)
+
+    sections = [
+        "\n\n🔒 PIXEL PRIORITY MODE - IDENTITY LOCK: ABSOLUTE\n",
+        "REFERENCE IMAGE HIERARCHY (in priority order):\n",
+        ref_list,
+        "\n\n⚠️ CRITICAL INSTRUCTIONS - IDENTITY LOCK PROTOCOL:\n"
+    ]
+
+    if include_bolt:
+        sections.append("""
+• BOLT (Image 1): This is the CANONICAL SOURCE OF TRUTH for Bolt the mascot
+  - Match EXACT colors (#0066FF blue body, yellow lightning bolt)
+  - Match EXACT proportions and cloud-form body shape
+  - Match EXACT headphones, antenna, and facial features
+  - DO NOT average or reinterpret - copy this design exactly
+""")
+
+    if include_hosts:
+        sections.append("""
+• HOSTS (Images 2-5): These are the SOURCE OF TRUTH for the four podcast hosts
+  - Use the composite visual data from all host reference images
+  - Match facial structure, features, hair patterns, and proportions from photos
+  - CRITICAL: Render hosts in the SAME CARTOON STYLE as Bolt
+  - Use simple geometric body shapes (rounded rectangles, circles) like Bolt's cloud form
+  - Minimal facial features with personality (dots/simple shapes for eyes, simple curves for mouths) matching Bolt's style
+  - Clean flat vector aesthetic matching Bolt's illustration style exactly
+  - Same level of simplification and abstraction as Bolt - NOT photorealistic, NOT detailed portraits
+  - Preserve distinctive features in cartoon form: bald head, horseshoe hair, facial hair patterns, face shapes
+  - Each host should look like a "brother character" to Bolt in the same visual universe
+  - DO NOT add people not shown in the references
+""")
+
+    sections.append("""
+• RENDERING STRATEGY:
+  - Modern flat illustration style (Kurzgesagt/Slack aesthetic)
+  - Simplified geometric shapes while maintaining facial recognizability
+  - Each character must be identifiable as the person in their reference image
+  - Characters should look like illustrated versions of the real people, not generic characters
+
+• AVOID:
+  - Averaging facial features across references
+  - Creating generic placeholder people
+  - Reinterpreting or redesigning characters
+  - Adding extra people beyond the references provided
+""")
+
+    return "".join(sections)
 
 
 # ============================================================================
@@ -318,6 +403,17 @@ class ImageVariant(Enum):
 # ============================================================================
 
 BASE_STYLE_PROMPT = """Create a playful, professional podcast cover background with these characteristics:
+
+THE CLOUD POD UNIVERSE CONTEXT:
+- This podcast covers cloud computing and tech industry news with humor and insight
+- The tone is always comedic and affectionate, never mean-spirited
+
+BRAND CHARACTER NOTES (only include if mentioned in the concept):
+- **Oracle - "The Evil Empire"**: When Oracle appears, portray as the bumbling, incompetent villain empire (think Dark Helmet from Spaceballs). Over-the-top evil aesthetic with comically inept execution. Big helmets, dramatic capes, "evil empire" branding, but everything goes wrong in silly ways. They're trying SO HARD to be menacing but keep tripping over themselves. The joke: we don't take their cloud seriously, so they're portrayed as wannabe villains who can't get anything right.
+- AWS: Dominant cloud leader, professional but can be playfully corporate
+- Google Cloud: Innovation-focused, sometimes quirky
+- Azure: Enterprise-focused Microsoft cloud
+- Only include these brands if they are explicitly mentioned in the episode concept or title
 
 ILLUSTRATION STYLE - Modern flat vector aesthetic:
 - Visual style reference: Think Kurzgesagt, Slack marketing illustrations, or modern tech editorial art
@@ -365,47 +461,71 @@ HUMOR & STORYTELLING:
 def build_concept_prompt(episode_title: str, previous_concepts: List[str] = None, keywords: str = None) -> str:
     """Build prompt for concept generation (text-only phase)"""
 
-    # Add previous concepts to avoid duplicates
-    previous_context = ""
-    if previous_concepts and len(previous_concepts) > 0:
-        previous_context = "\n\nPREVIOUS CONCEPTS ALREADY GENERATED (do NOT repeat these ideas):\n"
-        for i, concept in enumerate(previous_concepts, 1):
-            previous_context += f"{i}. {concept}\n"
-        previous_context += "\nYour concept must be COMPLETELY DIFFERENT from these.\n"
+    # Build dynamic sections
+    sections = ["""You are the creative director for The Cloud Pod, a tech podcast famous for visual wordplay and literal humor."""]
 
-    # Add keyword guidance if provided
-    keyword_guidance = ""
-    if keywords and keywords.strip():
-        keyword_guidance = f"\n\nKEYWORD GUIDANCE: The user wants concepts that incorporate or emphasize these themes: {keywords.strip()}\nUse these keywords to steer your creative direction while still interpreting the episode title literally.\n"
+    # Detect if title mentions AI/agent/bot/robot - these should map to Bolt
+    ai_keywords = ['ai', 'agent', 'bot', 'robot', 'artificial', 'intelligence', 'llm', 'model', 'chatbot']
+    title_lower = episode_title.lower()
+    mentions_ai = any(keyword in title_lower for keyword in ai_keywords)
 
-    return f"""You are the creative director for The Cloud Pod, a tech podcast famous for visual wordplay and literal humor.
+    sections.append(f"""
 
-Episode Title: "{episode_title}"
+Episode Title: '{episode_title}'
 
-YOUR TASK: Create ONE completely NEW visual scene based ONLY on "{episode_title}". Take the words in this title literally and create a specific, original scene.
+YOUR TASK: Create ONE completely NEW visual scene based ONLY on '{episode_title}'. Take the words in this title literally and create a specific, original scene.
 
 APPROACH - How to interpret titles literally:
-• Take individual WORDS literally (if title says "wardrobe", show actual clothing; if it says "layers", show a visual stack)
-• Convert abstract concepts into PHYSICAL objects (if title mentions "conversational", show someone literally talking/yelling)
-• Find the VISUAL PUN in the title's wording
-• Create SPECIFIC details (not vague "tech vibes" but concrete physical objects, readable text, tangible props)
-• Exaggerate for HUMOR (impossible proportions, absurd scales, playful contradictions)
+- Take individual WORDS literally (if title says 'wardrobe', show actual clothing; if it says 'layers', show a visual stack)
+- Convert abstract concepts into PHYSICAL objects (if title mentions 'conversational', show someone literally talking/yelling)
+- Find the VISUAL PUN in the title wording
+- Create SPECIFIC details (not vague 'tech vibes' but concrete physical objects, readable text, tangible props)
+- Exaggerate for HUMOR (impossible proportions, absurd scales, playful contradictions)
 
 CONCEPT VARIETY:
-• Many strong concepts focus on OBJECTS, ENVIRONMENTS, or ABSTRACT VISUALS without any characters
-• Minimalist concepts (empty server rack, floating cloud, literal interpretation of title words) are often the most effective
-• Abstract/environmental concepts are encouraged
-• ONLY include characters if they genuinely enhance the specific visual pun or story
+- Balance between CHARACTER-FOCUSED concepts and OBJECT/ENVIRONMENT concepts
+- Character-based concepts often work great for storytelling and humor
+- Minimalist object/environment concepts (empty server rack, floating cloud, literal interpretation) can also be effective
+- Choose the approach that best serves the specific visual pun
 
-IMPORTANT: Do NOT reuse visual elements from other episodes. Each concept must be completely original based on THIS episode's title.{previous_context}{keyword_guidance}
+IMPORTANT: Do NOT reuse visual elements from other episodes. Each concept must be completely original based on THIS episode title.""")
 
-OPTIONAL CHARACTERS (use sparingly, only when truly beneficial):
-• Bolt - cloud robot mascot (use only if robot/mascot fits the concept)
-• The Four Hosts - podcast team (use only if concept requires people/team interaction)
+    if previous_concepts:
+        concepts_list = "\n".join(f"{i}. {c}" for i, c in enumerate(previous_concepts, 1))
+        sections.append(f"\n\nPREVIOUS CONCEPTS ALREADY GENERATED (do NOT repeat these ideas):\n{concepts_list}\n\nYour concept must be COMPLETELY DIFFERENT from these.")
 
-Most concepts should NOT include characters. Focus on clever object-based or environmental visual metaphors first.
+    if keywords and keywords.strip():
+        sections.append(f"\n\nKEYWORD GUIDANCE: The user wants concepts that incorporate or emphasize these themes: {keywords.strip()}\nUse these keywords to steer your creative direction while still interpreting the episode title literally.")
 
-Return ONLY one sentence describing the specific visual scene based on "{episode_title}":"""
+    # Dynamic character guidance based on title content
+    if mentions_ai:
+        sections.append(f"""
+
+CHARACTER GUIDANCE - IMPORTANT FOR THIS EPISODE:
+This title mentions AI/agents/bots, which should naturally map to BOLT, our cloud robot mascot!
+
+- **Bolt** - The Cloud Pod's blue cloud robot mascot - PERFECT for representing AI agents, bots, or robots in the title
+  → When the title says "AI Agent" or similar, Bolt IS that agent
+  → Example: If title mentions "AI Agent Can't Keep Its Mouth Shut" → Show Bolt with mouth taped shut, secrets escaping, etc.
+  → Bolt works great as the main character for comedy, mishaps, and visual gags
+
+- **The Four Hosts** - Jonathan, Justin, Matthew, Ryan - Use when you need human characters or a team dynamic
+
+PRIORITY: Since this title mentions AI/agents, strongly consider using Bolt as the central character.""")
+    else:
+        sections.append(f"""
+
+AVAILABLE CHARACTERS (use when they enhance the concept):
+- **Bolt** - The Cloud Pod's blue cloud robot mascot - great for tech concepts, comedy, and character-driven visual gags
+- **The Four Hosts** - Jonathan, Justin, Matthew, Ryan - use for human-focused concepts or team dynamics
+
+Choose character-based or environment-based concepts based on what best serves the visual pun.""")
+
+    sections.append(f"""
+
+Return ONLY one sentence describing the specific visual scene based on '{episode_title}':""")
+
+    return "".join(sections)
 
 
 def build_image_prompt(concept: str, variant: ImageVariant, provider: Provider = None, include_bolt: bool = False, include_hosts: bool = False) -> str:
@@ -419,24 +539,23 @@ def build_image_prompt(concept: str, variant: ImageVariant, provider: Provider =
         include_hosts: Whether to include the four hosts (user choice)
     """
 
-    if variant == ImageVariant.SQUARE:
-        dimension_guidance = """Square format (1:1 aspect ratio).
+    format_type = "Square format (1:1 aspect ratio)." if variant == ImageVariant.SQUARE else "Horizontal landscape format (roughly 16:9 aspect ratio - WIDE not tall)."
 
-COMPOSITION FRAMING (important for final output):
-A text overlay bar will appear in the lower portion of the final image. Compose with visual weight in the upper 2/3 to 3/4 of the frame - this creates dynamic upward energy and ensures focal points remain visible.
+    dimension_guidance = f"""{format_type}
 
-Place your main subjects, characters, and key visual elements in the middle to upper-middle area. The lower quarter works beautifully for environmental grounding: floors, clouds, horizon lines, gradient backgrounds, or atmospheric elements that support the scene above.
+⚠️ CRITICAL COMPOSITION FRAMING - READ CAREFULLY:
+The lower 25% of this image will be COMPLETELY COVERED by a text overlay bar in post-production. ANY important visual elements placed in the bottom quarter will be HIDDEN and WASTED.
 
-Think: "Hero shot" or "magazine cover" composition - subject prominent in upper portion, environment supporting below."""
-    else:  # SOCIAL
-        dimension_guidance = """Horizontal landscape format (roughly 16:9 aspect ratio - WIDE not tall).
+MANDATORY PLACEMENT RULES:
+• ALL main subjects, characters, faces, key objects: Position in UPPER 75% ONLY (top and middle areas)
+• Character faces: Must be in upper-middle to upper portion - NEVER in bottom quarter
+• Important visual elements: Keep in top 3/4 of frame - pretend the bottom 25% doesn't exist for composition purposes
+• Bottom quarter use ONLY: Simple environmental grounding (solid floors, horizon lines, gradient sky/background, atmospheric effects)
+• Think of the canvas as 75% usable space for content + 25% reserved background space
 
-COMPOSITION FRAMING (important for final output):
-A text overlay bar will appear in the lower portion of the final image. Compose with visual weight in the upper 2/3 to 3/4 of the frame - this creates dynamic upward energy and ensures focal points remain visible.
+COMPOSITION ANALOGY: Like a magazine cover where the bottom has the magazine title bar - all the interesting content stays ABOVE that bar.
 
-Place your main subjects, characters, and key visual elements in the middle to upper-middle area. The lower quarter works beautifully for environmental grounding: floors, clouds, horizon lines, gradient backgrounds, or atmospheric elements that support the scene above.
-
-Think: "Hero shot" or "magazine cover" composition - subject prominent in upper portion, environment supporting below."""
+Visual weight and focal points: Upper 75% of frame. Bottom 25%: Just background fill."""
 
     # Add Bolt guidance only if user selected it
     bolt_guidance = ""
@@ -468,15 +587,34 @@ RENDERING PRIORITY: Match the reference image design exactly - this character mu
 
 THE FOUR CLOUD POD HOSTS - Character Design Consistency Guide
 
+STANDARD SCENARIO: The podcast has 4 core hosts - Jonathan, Justin, Matthew, and Ryan
+- For typical scenes, render these 4 distinct individuals with their signature characteristics
+- Each host has recognizable visual signatures (hair, facial hair, outfit colors, build)
+
+CROWD/DUPLICATION SCENARIOS: When the concept requires many people (org charts, crowds, teams, armies, etc.)
+- You may duplicate the hosts to fill the scene
+- CRITICAL: Add distinguishing variations to each duplicate so they don't look identical:
+  - Accessories: glasses, hats, headphones, scarves, capes, ties, badges
+  - Props: laptops, phones, tennis rackets, canes, coffee cups, tablets
+  - Costume variations: different shirt colors/styles, jackets, hoodies, formal wear
+  - Hairstyle tweaks: different lengths, styles, colors (while maintaining base recognition)
+  - Posture variations: sitting, standing, leaning, different arm positions
+- Maintain core recognizability (Jonathan's build, Justin's bald head, Matthew's horseshoe, Ryan's wavy hair) but add visual variety
+- Think: "alternate universe versions" or "the same person in different outfits/contexts"
+- Examples:
+  - Org chart: Same bald Justin at different levels - one in suit with glasses, one in hoodie with coffee, one in blazer with tablet
+  - Crowd scene: Multiple Matthews - one with sunglasses, one with cap, one with scarf, all maintaining horseshoe hair and beard
+  - Team meeting: Duplicated Ryans - different colored sweaters (teal, navy, gray), varied gestures, one with laptop
+
 Illustration Style: Modern flat vector (Kurzgesagt/Slack aesthetic)
 Key Principle: DISTINCTIVE SILHOUETTES + COLOR CODING + VISUAL SIGNATURES
 
 SHARED DESIGN LANGUAGE:
-• Simple geometric body shapes (rounded rectangles for torsos)
-• Minimal facial features with personality (simple eyes, expressive mouths)
-• Tech-casual professional attire (each has signature outfit)
-• Similar scale to each other, all standing roughly same height
-• Light skin tone, simple flat color rendering
+- Simple geometric body shapes (rounded rectangles for torsos)
+- Minimal facial features with personality (simple eyes, expressive mouths)
+- Tech-casual professional attire (each has signature outfit)
+- Similar scale to each other, all standing roughly same height
+- Light skin tone, simple flat color rendering
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -531,14 +669,14 @@ Tertiary ID: Signature color (blue, gray, orange, teal)
 Quaternary ID: Build (Jonathan=broad, Justin=solid, Matthew=lean, Ryan=balanced)
 
 GROUP COMPOSITION (when all 4 appear together):
-• Standard order left-to-right: Jonathan → Justin → Matthew → Ryan
-• Spacing: Clear breathing room between each character, no overlap
-• Scale: All roughly similar height, similar size to each other
-• Arrangement: Arc, line, or informal cluster (avoid rigid lineup unless concept calls for it)
-• Interaction: Characters react to scene elements or look at shared focal point
-• With Bolt: Mascot appears in center or floating above, roughly 60-70% of host height
+- Standard order left-to-right: Jonathan → Justin → Matthew → Ryan
+- Spacing: Clear breathing room between each character, no overlap
+- Scale: All roughly similar height, similar size to each other
+- Arrangement: Arc, line, or informal cluster (avoid rigid lineup unless concept calls for it)
+- Interaction: Characters react to scene elements or look at shared focal point
+- With Bolt: Mascot appears in center or floating above, roughly 60-70% of host height
 
-CONSISTENCY CHECKLIST:
+CONSISTENCY CHECKLIST (for standard 4-host scenes):
 ✓ Can you identify each host by silhouette alone?
 ✓ Is each character's signature color visible in their outfit?
 ✓ Are the four hair patterns clearly distinct? (full, bald, horseshoe, wavy)
@@ -546,21 +684,52 @@ CONSISTENCY CHECKLIST:
 ✓ Are they in recognizable left-to-right order when in group?
 ✓ Does each pose match their personality archetype?
 
-RENDERING PRIORITY: These four characters must be instantly recognizable across all episodes through their visual signatures."""
+DUPLICATION CHECKLIST (for crowd/org chart scenes):
+✓ If hosts are duplicated, does each copy have distinguishing features?
+✓ Are accessories/props varied across duplicates (glasses, hats, different colored shirts)?
+✓ Can you still recognize the "base" host despite variations (bald head, horseshoe hair, etc.)?
+✓ Do variations feel natural and not random?
+
+RENDERING PRIORITY: Core hosts must be instantly recognizable through their visual signatures, even when varied for crowd scenes."""
 
     # Model-specific style emphasis
     model_emphasis = ""
     if provider == Provider.OPENAI:
         model_emphasis = "\n\nOPENAI MODEL OPTIMIZATION:\n• Prioritize clean flat illustration with bold shapes and smooth color gradients\n• Leverage strong facial expression capabilities - show personality through simple expressive faces\n• Use lighting and depth to separate characters while maintaining flat aesthetic\n• Consistent proportions are key - maintain character scale relationships\n• Avoid photorealistic rendering - stay in illustration style"
     elif provider == Provider.GEMINI:
-        model_emphasis = "\n\nGEMINI MODEL OPTIMIZATION:\n• Match exact visual style and character designs from reference images provided\n• Emphasize geometric shape language - clean simple forms\n• Strong on color consistency - use signature colors to distinguish characters\n• Test silhouettes - characters should be recognizable in black shadow\n• Maintain consistent character design across entire scene"
+        # Add duplication variation reminder for Gemini
+        duplication_reminder = ""
+        if include_hosts:
+            duplication_reminder = "\n• If duplicating hosts for crowd scenes, add accessories/costume variations to each copy (glasses, different colored shirts, props, hats, etc.)"
+
+        model_emphasis = f"\n\nGEMINI MODEL OPTIMIZATION:\n• Match exact visual style and character designs from reference images provided\n• Emphasize geometric shape language - clean simple forms\n• Strong on color consistency - use signature colors to distinguish characters\n• Test silhouettes - characters should be recognizable in black shadow\n• Maintain consistent character design across entire scene{duplication_reminder}"
+
+    # Build mandatory character inclusion instruction
+    character_requirement = ""
+    if include_hosts and include_bolt:
+        character_requirement = """
+
+🎭 MANDATORY CHARACTER INCLUSION - THIS VARIANT MUST INCLUDE:
+• Bolt (the blue cloud robot mascot) - REQUIRED in this scene
+• All four podcast hosts (Jonathan, Justin, Matthew, Ryan) - REQUIRED in this scene
+
+These characters MUST appear in this image, integrated naturally into the concept described above.
+Arrange them as a group interacting with the scene elements, reacting to the situation, or participating in the visual story.
+Do not skip any characters - all five must be present and clearly visible."""
+    elif include_bolt:
+        character_requirement = """
+
+🎭 MANDATORY CHARACTER INCLUSION - THIS VARIANT MUST INCLUDE:
+• Bolt (the blue cloud robot mascot) - REQUIRED in this scene
+
+Bolt MUST appear in this image, integrated naturally into the concept."""
 
     return f"""{BASE_STYLE_PROMPT}
 
 SPECIFIC EPISODE CONCEPT:
 {concept}
 
-CRITICAL: Render ONLY the elements described in the concept above. Do not add unrelated objects, characters, or text that are not explicitly mentioned in the concept.
+CRITICAL: Render the elements described in the concept above. Do not add unrelated objects or text that are not explicitly mentioned in the concept.{character_requirement}
 {bolt_guidance}
 {hosts_guidance}
 
@@ -574,6 +743,34 @@ Generate a background image that visualizes this concept while maintaining The C
 # TEXT GENERATION FUNCTIONS (Concept Phase)
 # ============================================================================
 
+async def _make_api_request(
+    session: aiohttp.ClientSession,
+    url: str,
+    payload: dict,
+    headers: dict,
+    provider_name: str,
+    extract_response
+) -> Optional[str]:
+    """Generic API request handler for both OpenAI and Gemini"""
+    try:
+        async with session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                return extract_response(data)
+            else:
+                error_text = await response.text()
+                logger.error(f"{provider_name} request failed: {error_text}")
+                return None
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        logger.error(f"{provider_name} request error: {e}")
+        return None
+
+
 async def generate_concept_openai(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -582,41 +779,18 @@ async def generate_concept_openai(
     keywords: str = None
 ) -> Optional[str]:
     """Generate a creative concept using OpenAI GPT-4"""
-
-    prompt = build_concept_prompt(episode_title, previous_concepts, keywords)
-
     payload = {
-        "model": "gpt-4",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.9,  # High creativity
-        "max_tokens": 300  # Increased to match concept complexity
+        "model": OPENAI_CHAT_MODEL,
+        "messages": [{"role": "user", "content": build_concept_prompt(episode_title, previous_concepts, keywords)}],
+        "max_completion_tokens": 2000,
+        "reasoning_effort": "medium"
     }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        async with session.post(
-            OPENAI_CHAT_ENDPOINT,
-            json=payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            if response.status == 200:
-                data = await response.json()
-                concept = data["choices"][0]["message"]["content"].strip()
-                return concept
-            else:
-                error_text = await response.text()
-                logger.error(f"OpenAI concept generation failed: {error_text}")
-                return None
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        logger.error(f"OpenAI concept generation error: {e}")
-        return None
+    return await _make_api_request(
+        session, OPENAI_CHAT_ENDPOINT, payload, headers, "OpenAI",
+        lambda data: data["choices"][0]["message"]["content"].strip()
+    )
 
 
 async def generate_concept_gemini(
@@ -627,38 +801,18 @@ async def generate_concept_gemini(
     keywords: str = None
 ) -> Optional[str]:
     """Generate a creative concept using Google Gemini"""
-
-    prompt = build_concept_prompt(episode_title, previous_concepts, keywords)
-
     payload = {
-        "contents": [
-            {"parts": [{"text": prompt}]}
-        ],
+        "contents": [{"parts": [{"text": build_concept_prompt(episode_title, previous_concepts, keywords)}]}],
         "generationConfig": {
-            "temperature": 0.9,  # High creativity
-            "maxOutputTokens": 2048  # Gemini uses ~3-4 tokens per word, need higher limit
+            "temperature": 0.9,
+            "maxOutputTokens": 2048
         }
     }
 
-    url = f"{GEMINI_TEXT_ENDPOINT}?key={api_key}"
-
-    try:
-        async with session.post(
-            url,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            if response.status == 200:
-                data = await response.json()
-                concept = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                return concept
-            else:
-                error_text = await response.text()
-                logger.error(f"Gemini concept generation failed: {error_text}")
-                return None
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        logger.error(f"Gemini concept generation error: {e}")
-        return None
+    return await _make_api_request(
+        session, f"{GEMINI_TEXT_ENDPOINT}?key={api_key}", payload, {}, "Gemini",
+        lambda data: data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    )
 
 
 async def generate_concepts(episode_title: str) -> List[Tuple[str, str]]:
@@ -787,10 +941,9 @@ Return ONLY the refined concept in one sentence:"""
                         "Content-Type": "application/json"
                     },
                     json={
-                        "model": "gpt-4",
+                        "model": OPENAI_CHAT_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.7,
-                        "max_tokens": CONCEPT_REFINEMENT_TOKENS
+                        "max_completion_tokens": CONCEPT_REFINEMENT_TOKENS
                     },
                     timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
@@ -819,6 +972,71 @@ Return ONLY the refined concept in one sentence:"""
         return None
 
 
+async def polish_custom_concept(custom_concept: str, episode_title: str) -> Optional[str]:
+    """Polish and improve a user's custom concept while preserving their intent"""
+    prompt = f"""You are helping polish a custom visual concept for The Cloud Pod podcast cover.
+
+Episode Title: "{episode_title}"
+User's Custom Concept: "{custom_concept}"
+
+YOUR TASK: Clean up and improve this concept while PRESERVING the user's core idea and intent.
+
+IMPROVEMENTS TO MAKE:
+- Add specific visual details (colors, scales, textures, spatial relationships)
+- Enhance comedic elements or visual puns already present
+- Ensure the concept fits The Cloud Pod's playful, professional tech aesthetic
+- Add clarity about positioning, framing, and composition if vague
+- If the concept mentions "Bolt" or characters, maintain that focus
+- Keep the description to 1-2 sentences maximum
+
+IMPORTANT: Keep the user's core idea intact. Only enhance and clarify, don't change the fundamental concept.
+
+Return ONLY the polished concept:"""
+
+    try:
+        # Use OpenAI if available, otherwise Gemini
+        provider = "OpenAI" if OPENAI_API_KEY else "Gemini"
+
+        async with aiohttp.ClientSession() as session:
+            if provider == "OpenAI" and OPENAI_API_KEY:
+                async with session.post(
+                    OPENAI_CHAT_ENDPOINT,
+                    headers={
+                        "Authorization": f"Bearer {OPENAI_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": OPENAI_CHAT_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_completion_tokens": CONCEPT_REFINEMENT_TOKENS
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data["choices"][0]["message"]["content"].strip()
+            else:  # Gemini
+                if GOOGLE_API_KEY:
+                    url = f"{GEMINI_TEXT_ENDPOINT}?key={GOOGLE_API_KEY}"
+                    async with session.post(
+                        url,
+                        json={
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {"temperature": 0.7, "maxOutputTokens": CONCEPT_REFINEMENT_TOKENS}
+                        },
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+        logger.error("Custom concept polishing failed")
+        return None
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError) as e:
+        logger.error(f"Custom concept polishing error: {e}")
+        return None
+
+
 async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_title: str) -> Tuple[int, str, bool]:
     """Display concepts and get user selection
 
@@ -840,7 +1058,7 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
         print("\n" + "=" * 70)
         concept_range = f"1-{len(concepts)}"
         refine_range = f"R1-R{len(concepts)}"
-        print(f"Commands: [{concept_range}] = Select concept | 0 = Generate 6 new concepts | M = Generate MORE concepts | {refine_range} = Refine concept | X = Exit")
+        print(f"Commands: [{concept_range}] = Select concept | W = Write your own concept | 0 = Generate 6 new concepts | M = Generate MORE concepts | {refine_range} = Refine concept | X = Exit")
 
         while True:  # Inner loop for user input
             try:
@@ -855,6 +1073,60 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                 if choice == '0':
                     print("\n🔄 Regenerating concepts...")
                     return 0, "", True
+
+                # Write your own concept
+                if choice == 'W':
+                    print("\n✍️  Write Your Own Concept")
+                    print("-" * 70)
+                    print("Describe the visual scene you want to create.")
+                    print("Be specific about characters, objects, actions, and visual details.")
+                    print("Example: 'Bolt with duct tape over his mouth, emerging from a room")
+                    print("         filled with floating \"TOP SECRET\" folders and locked safes.'")
+                    print("-" * 70)
+                    custom_concept = input("\nYour concept: ").strip()
+
+                    if custom_concept:
+                        print(f"\n📝 Your concept: {custom_concept}")
+                        print("\n⏳ Polishing your concept...")
+
+                        # Polish the custom concept using AI
+                        polished = await polish_custom_concept(custom_concept, episode_title)
+
+                        if polished:
+                            print(f"\n✨ Polished concept: {polished}\n")
+                            confirm = input("Use this polished concept? (Y/n/e to edit): ").strip().lower()
+
+                            if confirm == 'e':
+                                # Allow user to edit the polished version
+                                print("\nEdit the polished concept:")
+                                edited_concept = input(f"{polished}\n> ").strip()
+                                if edited_concept:
+                                    concepts.append((edited_concept, "Custom"))
+                                    return len(concepts), edited_concept, False
+                                else:
+                                    # User pressed enter without editing, use polished version
+                                    concepts.append((polished, "Custom"))
+                                    return len(concepts), polished, False
+                            elif confirm != 'n':
+                                # Add polished concept to list and return it
+                                concepts.append((polished, "Custom"))
+                                return len(concepts), polished, False
+                            else:
+                                # User rejected, try original
+                                use_original = input("\nUse your original concept instead? (Y/n): ").strip().lower()
+                                if use_original != 'n':
+                                    concepts.append((custom_concept, "Custom"))
+                                    return len(concepts), custom_concept, False
+                        else:
+                            # Polishing failed, offer to use original
+                            print("\n⚠️  Polishing failed, but you can still use your original concept.")
+                            confirm = input("Use your original concept? (Y/n): ").strip().lower()
+                            if confirm != 'n':
+                                concepts.append((custom_concept, "Custom"))
+                                return len(concepts), custom_concept, False
+                    else:
+                        print("❌ Concept cannot be empty")
+                        continue
 
                 # Generate MORE concepts
                 if choice == 'M':
@@ -903,10 +1175,10 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                     print(f"\n✓ Selected #{choice_num} [{provider}]: {selected_concept}\n")
                     return choice_num, selected_concept, False
                 else:
-                    print(f"Please enter 1-{len(concepts)}, 0, M, R#, or X")
+                    print(f"Please enter 1-{len(concepts)}, W, 0, M, R#, or X")
 
             except ValueError:
-                print(f"Please enter 1-{len(concepts)}, 0, M, R# (e.g., R3), or X")
+                print(f"Please enter 1-{len(concepts)}, W, 0, M, R# (e.g., R3), or X")
             except KeyboardInterrupt:
                 print("\n\n👋 Exiting...")
                 sys.exit(0)
@@ -918,6 +1190,27 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
 # IMAGE GENERATION FUNCTIONS
 # ============================================================================
 
+def _filter_references(references: List[Dict[str, str]], include_bolt: bool, include_hosts: bool) -> List[Dict[str, str]]:
+    """Filter reference images based on what's requested"""
+    return [ref for ref in references
+            if (ref["name"] == "Bolt" and include_bolt) or (ref["name"] != "Bolt" and include_hosts)]
+
+
+async def _extract_openai_image(session: aiohttp.ClientSession, data: dict, variant: ImageVariant) -> Optional[bytes]:
+    """Extract image bytes from OpenAI API response"""
+    if "data" in data and len(data["data"]) > 0:
+        image_data = data["data"][0]
+        if "b64_json" in image_data:
+            print(f"  ✓ OpenAI {variant.value} generated")
+            return base64.b64decode(image_data["b64_json"])
+        elif "url" in image_data:
+            async with session.get(image_data["url"]) as img_response:
+                if img_response.status == 200:
+                    print(f"  ✓ OpenAI {variant.value} generated")
+                    return await img_response.read()
+    return None
+
+
 async def generate_image_openai(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -927,39 +1220,48 @@ async def generate_image_openai(
     include_bolt: bool = False,
     include_hosts: bool = False
 ) -> Optional[bytes]:
-    """Generate image using OpenAI GPT Image with reference images via edit endpoint"""
+    """Generate image using OpenAI GPT Image 1.5 with 5-reference strategy"""
 
-    print(f"  🎨 OpenAI generating {variant.value} variant...")
+    print(f"  🎨 OpenAI GPT-Image-1.5 generating {variant.value} variant...")
 
-    # Use edit endpoint ONLY if we have Bolt (actual reference image)
-    # Hosts are described via text, so they don't require edit endpoint
-    use_edit_endpoint = include_bolt
+    # Use edit endpoint if we have ANY reference images (Bolt and/or hosts)
+    use_edit_endpoint = include_bolt or include_hosts
 
     if use_edit_endpoint:
-        # Use images.edit endpoint with reference images
-        # Build multipart form data
+        # Use images.edit endpoint with 5-reference strategy
+        # gpt-image-1.5 supports up to 5 reference images
         import aiohttp
 
         form = aiohttp.FormData()
-        form.add_field('model', 'gpt-image-1')
-        form.add_field('prompt', prompt)
+        form.add_field('model', OPENAI_IMAGE_MODEL)
         form.add_field('size', '1024x1024')
         form.add_field('quality', 'high')
         form.add_field('input_fidelity', 'high')  # Preserve details from input images
         form.add_field('output_format', 'png')
         form.add_field('n', '1')
 
-        # Add reference images using array syntax (image[])
-        # Only add Bolt reference - hosts are described via text prompts
-        if include_bolt:
-            bolt_ref = load_bolt_reference()
-            if bolt_ref:
-                bolt_bytes = base64.b64decode(bolt_ref)
-                form.add_field('image[]', bolt_bytes, filename='bolt.png', content_type='image/png')
-                print("  📸 Using Bolt reference image")
+        # Load and filter references
+        references = load_host_references()
+        filtered_refs = _filter_references(references, include_bolt, include_hosts)
 
-        if include_hosts:
-            print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
+        print(f"  📋 Loaded {len(references)} total references, filtered to {len(filtered_refs)} (Bolt={include_bolt}, Hosts={include_hosts})")
+
+        if filtered_refs:
+            for ref in filtered_refs:
+                ref_bytes = base64.b64decode(ref["data"])
+                content_type = "image/png" if ref["filename"].endswith('.png') else "image/jpeg"
+                form.add_field('image[]', ref_bytes, filename=ref["filename"], content_type=content_type)
+
+            print(f"  📸 Using {len(filtered_refs)} reference images with identity lock")
+
+        # Build identity lock instructions and add to prompt
+        reference_instructions = build_reference_hierarchy_instructions(references, include_bolt, include_hosts)
+        enhanced_prompt = f"""{reference_instructions}
+
+GENERATION TASK:
+{prompt}"""
+
+        form.add_field('prompt', enhanced_prompt)
 
         endpoint = "https://api.openai.com/v1/images/edits"
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -973,18 +1275,9 @@ async def generate_image_openai(
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    if "data" in data and len(data["data"]) > 0:
-                        image_data = data["data"][0]
-                        if "b64_json" in image_data:
-                            image_bytes = base64.b64decode(image_data["b64_json"])
-                            print(f"  ✓ OpenAI {variant.value} generated")
-                            return image_bytes
-                        elif "url" in image_data:
-                            async with session.get(image_data["url"]) as img_response:
-                                if img_response.status == 200:
-                                    image_bytes = await img_response.read()
-                                    print(f"  ✓ OpenAI {variant.value} generated")
-                                    return image_bytes
+                    result = await _extract_openai_image(session, data, variant)
+                    if result:
+                        return result
                     logger.error("No image data in OpenAI response")
                     return None
                 else:
@@ -1001,7 +1294,7 @@ async def generate_image_openai(
             print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
 
         payload = {
-            "model": "gpt-image-1",
+            "model": OPENAI_IMAGE_MODEL,
             "prompt": prompt,
             "n": 1,
             "size": "1024x1024",
@@ -1009,10 +1302,7 @@ async def generate_image_openai(
             "output_format": "png"
         }
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         try:
             async with session.post(
@@ -1023,20 +1313,9 @@ async def generate_image_openai(
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-
-                    if "data" in data and len(data["data"]) > 0:
-                        image_data = data["data"][0]
-                        if "b64_json" in image_data:
-                            image_bytes = base64.b64decode(image_data["b64_json"])
-                            print(f"  ✓ OpenAI {variant.value} generated")
-                            return image_bytes
-                        elif "url" in image_data:
-                            async with session.get(image_data["url"]) as img_response:
-                                if img_response.status == 200:
-                                    image_bytes = await img_response.read()
-                                    print(f"  ✓ OpenAI {variant.value} generated")
-                                    return image_bytes
-
+                    result = await _extract_openai_image(session, data, variant)
+                    if result:
+                        return result
                     logger.error("No image data in OpenAI response")
                     return None
                 else:
@@ -1059,54 +1338,53 @@ async def generate_image_gemini(
 ) -> Optional[bytes]:
     """Generate image using Google Gemini with optional reference images"""
 
-    print(f"  🎨 Gemini generating {variant.value} variant...")
+    print(f"  🎨 Gemini 3 Pro Image (Nano Banana) generating {variant.value} variant...")
 
-    # Check for character references in concept
+    # Load and filter reference images
     parts = []
-    reference_text_parts = []
+    references = load_host_references()
+    filtered_refs = _filter_references(references, include_bolt, include_hosts)
 
-    # Load Bolt reference if user selected it
-    if include_bolt:
-        bolt_reference_b64 = load_bolt_reference()
-        if bolt_reference_b64:
-            parts.append({
-                "inline_data": {
-                    "mime_type": "image/png",
-                    "data": bolt_reference_b64
-                }
-            })
-            reference_text_parts.append("The first image shows 'Bolt' (The Cloud Pod mascot). Match this character's exact design, colors, and proportions when Bolt appears in the scene.")
-            print("  📸 Using Bolt reference image")
+    print(f"  📋 Loaded {len(references)} total references, filtered to {len(filtered_refs)} (Bolt={include_bolt}, Hosts={include_hosts})")
 
-    # Use text descriptions for hosts instead of reference images
-    if include_hosts:
-        print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
+    # Build prompt following Google's official SDK example:
+    # Prompt FIRST, then reference images (no captions between)
+    if filtered_refs:
+        # Build concise prompt with character descriptions
+        character_intro = ""
+        if include_bolt:
+            character_intro += "Bolt (the blue cloud robot mascot shown in the first reference image). "
+        if include_hosts:
+            character_intro += "The four podcast hosts (Jonathan, Justin, Matthew, Ryan) shown in the reference photos. Render them in the same cartoon style as Bolt - simple flat vector illustration with distinctive hair patterns: Jonathan has dark wavy hair and is clean-shaven, Justin is completely bald with gray goatee, Matthew has horseshoe hair pattern (bald on top, hair on sides) with full brown beard, Ryan has wavy golden-brown hair with brown goatee. Use their signature outfit colors: blue, gray, orange, teal."
 
-    # Build final prompt with references
-    if reference_text_parts:
-        reference_instructions = "\n".join(reference_text_parts)
-        final_prompt = f"""CRITICAL: REFERENCE IMAGES PROVIDED ABOVE
-
-{reference_instructions}
-
-IMPORTANT INSTRUCTIONS:
-- You MUST match the exact character designs from the reference images
-- For Bolt: Copy the exact colors, proportions, features, and style from the reference
-- For hosts: Use the reference images as the basis for silhouettes and variations
-- DO NOT reinterpret or redesign these characters
-- Maintain high fidelity to the provided references
+        # Prompt comes FIRST (matching official SDK example)
+        final_prompt = f"""An illustration featuring {character_intro}
 
 GENERATION TASK:
 {prompt}"""
         parts.append({"text": final_prompt})
+
+        # Then add ALL reference images in sequence (no captions between)
+        for ref in filtered_refs:
+            mime_type = "image/jpeg" if ref["filename"].endswith(('.jpg', '.jpeg')) else "image/png"
+            parts.append({"inline_data": {"mime_type": mime_type, "data": ref["data"]}})
+
     else:
         parts.append({"text": prompt})
 
-    # Gemini image generation
+    # Gemini image generation - matching official SDK config structure
+    # Set aspect ratio and resolution based on variant
+    aspect_ratio = "1:1" if variant == ImageVariant.SQUARE else "16:9"
+    image_size = "4K"  # Maximum quality (options: "1K", "2K", "4K")
+
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": {
-            "responseModalities": ["IMAGE", "TEXT"]
+            "responseModalities": ["IMAGE", "TEXT"],
+            "imageConfig": {
+                "aspectRatio": aspect_ratio,
+                "imageSize": image_size
+            }
         }
     }
 
@@ -1121,25 +1399,16 @@ GENERATION TASK:
             if response.status == 200:
                 data = await response.json()
 
-                # Extract image from Gemini response (match emoji system logic)
+                # Extract image from Gemini response (try both camelCase and snake_case)
                 if "candidates" in data and len(data["candidates"]) > 0:
                     candidate = data["candidates"][0]
                     if "content" in candidate and "parts" in candidate["content"]:
                         for part in candidate["content"]["parts"]:
-                            # Try camelCase
-                            if "inlineData" in part:
-                                image_data = part["inlineData"].get("data")
-                                if image_data:
-                                    image_bytes = base64.b64decode(image_data)
-                                    print(f"  ✓ Gemini {variant.value} generated")
-                                    return image_bytes
-                            # Try snake_case
-                            if "inline_data" in part:
-                                image_data = part["inline_data"].get("data")
-                                if image_data:
-                                    image_bytes = base64.b64decode(image_data)
-                                    print(f"  ✓ Gemini {variant.value} generated")
-                                    return image_bytes
+                            # Try both naming conventions
+                            inline_data = part.get("inlineData") or part.get("inline_data")
+                            if inline_data and inline_data.get("data"):
+                                print(f"  ✓ Gemini {variant.value} generated")
+                                return base64.b64decode(inline_data["data"])
 
                 logger.error("No image data in Gemini response")
                 return None
@@ -1243,6 +1512,30 @@ def wrap_text(
     return lines
 
 
+def atomic_write(target_path: Path, write_func, *args, **kwargs):
+    """Atomic file write using temp file + rename pattern"""
+    import tempfile
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_fd, temp_path = tempfile.mkstemp(
+        suffix='.tmp',
+        dir=target_path.parent,
+        prefix=target_path.stem + '_'
+    )
+
+    try:
+        os.close(temp_fd)
+        write_func(temp_path, *args, **kwargs)
+        os.replace(temp_path, target_path)
+    except Exception:
+        try:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+        except Exception:
+            pass
+        raise
+
+
 def add_logo_with_shadow(
     base_img: Image.Image,
     logo_path: Path,
@@ -1334,155 +1627,79 @@ def process_and_save(
                 # Normal resize for other cases
                 img = img.resize(target_size, Image.Resampling.LANCZOS)
 
-        # Create overlay bar at bottom for title/logo
+        # Get variant-specific parameters
+        is_square = variant == ImageVariant.SQUARE
+        bar_height = SQUARE_BAR_HEIGHT if is_square else SOCIAL_BAR_HEIGHT
+        episode_font_size = SQUARE_EPISODE_FONT_SIZE if is_square else SOCIAL_EPISODE_FONT_SIZE
+        title_font_size = SQUARE_TITLE_FONT_SIZE if is_square else SOCIAL_TITLE_FONT_SIZE
+        line_spacing = SQUARE_LINE_SPACING if is_square else SOCIAL_LINE_SPACING
+        episode_title_gap = SQUARE_EPISODE_TITLE_GAP if is_square else SOCIAL_EPISODE_TITLE_GAP
+        logo_size = SQUARE_LOGO_SIZE if is_square else SOCIAL_LOGO_SIZE
+
+        # Create overlay bar at bottom
         overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
         overlay_draw = ImageDraw.Draw(overlay)
+        bar_y = img.size[1] - bar_height
+        overlay_draw.rectangle([(0, bar_y), (img.size[0], img.size[1])], fill=(0, 0, 0, TITLE_BAR_ALPHA))
 
-        if variant == ImageVariant.SQUARE:
-            # Square format: bottom bar with grouped title
-            bar_height = SQUARE_BAR_HEIGHT
-            bar_y = img.size[1] - bar_height
+        # Composite overlay onto image
+        img = Image.alpha_composite(img, overlay)
+        draw = ImageDraw.Draw(img)
 
-            # Draw semi-transparent black bar at bottom
-            overlay_draw.rectangle(
-                [(0, bar_y), (img.size[0], img.size[1])],
-                fill=(0, 0, 0, TITLE_BAR_ALPHA)
-            )
+        # Setup fonts and text
+        episode_font = get_font(episode_font_size)
+        title_font = get_font(title_font_size)
+        episode_text = f"Episode {episode_num}"
 
-            # Composite overlay onto image
-            img = Image.alpha_composite(img, overlay)
-            draw = ImageDraw.Draw(img)
+        # Calculate available width for title wrapping
+        max_title_width = img.size[0] - (2 * TITLE_BAR_PADDING) if is_square else img.size[0] - logo_size[0] - (3 * TITLE_BAR_PADDING)
+        title_lines = wrap_text(episode_title, title_font, max_title_width, draw)
 
-            # Episode number and title - grouped together, centered
-            episode_font = get_font(SQUARE_EPISODE_FONT_SIZE)
-            title_font = get_font(SQUARE_TITLE_FONT_SIZE)
+        # Calculate positioning
+        episode_bbox = draw.textbbox((0, 0), episode_text, font=episode_font)
+        episode_height = episode_bbox[3] - episode_bbox[1]
+        episode_width = episode_bbox[2] - episode_bbox[0]
+        title_line_height = title_font_size + line_spacing
+        total_content_height = episode_height + episode_title_gap + (len(title_lines) * title_line_height)
+        content_start_y = bar_y + (bar_height - total_content_height) // 2
 
-            episode_text = f"Episode {episode_num}"
+        # Draw episode number
+        if is_square:
+            episode_x = (img.size[0] - episode_width) // 2  # Centered
+        else:
+            episode_x = TITLE_BAR_PADDING  # Left-aligned
 
-            # Wrap title to fit
-            max_title_width = img.size[0] - (2 * TITLE_BAR_PADDING)
-            title_lines = wrap_text(episode_title, title_font, max_title_width, draw)
+        draw.text((episode_x, content_start_y), episode_text, font=episode_font, fill="white")
 
-            # Calculate total content height
-            episode_bbox = draw.textbbox((0, 0), episode_text, font=episode_font)
-            episode_height = episode_bbox[3] - episode_bbox[1]
+        # Draw title lines
+        title_y = content_start_y + episode_height + episode_title_gap
+        for line in title_lines:
+            if is_square:
+                line_width = draw.textbbox((0, 0), line, font=title_font)[2] - draw.textbbox((0, 0), line, font=title_font)[0]
+                line_x = (img.size[0] - line_width) // 2  # Centered
+            else:
+                line_x = TITLE_BAR_PADDING  # Left-aligned
 
-            title_line_height = SQUARE_TITLE_FONT_SIZE + SQUARE_LINE_SPACING
-            total_content_height = episode_height + SQUARE_EPISODE_TITLE_GAP + (len(title_lines) * title_line_height)
+            draw.text((line_x, title_y), line, font=title_font, fill="white")
+            title_y += title_line_height
 
-            # Center vertically in the bar
-            content_start_y = bar_y + (bar_height - total_content_height) // 2
-
-            # Draw episode number (centered)
-            episode_width = episode_bbox[2] - episode_bbox[0]
-            episode_x = (img.size[0] - episode_width) // 2
-            draw.text((episode_x, content_start_y), episode_text, font=episode_font, fill="white")
-
-            # Draw title lines (centered, below episode)
-            title_y = content_start_y + episode_height + SQUARE_EPISODE_TITLE_GAP
-            for line in title_lines:
-                line_bbox = draw.textbbox((0, 0), line, font=title_font)
-                line_width = line_bbox[2] - line_bbox[0]
-                line_x = (img.size[0] - line_width) // 2
-                draw.text((line_x, title_y), line, font=title_font, fill="white")
-                title_y += title_line_height
-
-            # Add logo in the bar (bottom-right corner)
-            logo = Image.open(LOGO_PATH).convert('RGBA')
-            logo = logo.resize(SQUARE_LOGO_SIZE, Image.Resampling.LANCZOS)
-            logo_x = img.size[0] - SQUARE_LOGO_SIZE[0] - TITLE_BAR_PADDING
-            logo_y = img.size[1] - SQUARE_LOGO_SIZE[1] - TITLE_BAR_PADDING
-            img.paste(logo, (logo_x, logo_y), logo)
-
-        else:  # SOCIAL format
-            # Social format: bottom bar with grouped title (left-aligned)
-            bar_height = SOCIAL_BAR_HEIGHT
-            bar_y = img.size[1] - bar_height
-
-            # Draw semi-transparent black bar at bottom
-            overlay_draw.rectangle(
-                [(0, bar_y), (img.size[0], img.size[1])],
-                fill=(0, 0, 0, TITLE_BAR_ALPHA)
-            )
-
-            # Composite overlay onto image
-            img = Image.alpha_composite(img, overlay)
-            draw = ImageDraw.Draw(img)
-
-            # Episode number and title - grouped together, left-aligned
-            episode_font = get_font(SOCIAL_EPISODE_FONT_SIZE)
-            title_font = get_font(SOCIAL_TITLE_FONT_SIZE)
-
-            episode_text = f"Episode {episode_num}"
-
-            # Calculate available width (accounting for logo on right)
-            available_width = img.size[0] - SOCIAL_LOGO_SIZE[0] - (3 * TITLE_BAR_PADDING)
-            title_lines = wrap_text(episode_title, title_font, available_width, draw)
-
-            # Calculate positioning
-            episode_bbox = draw.textbbox((0, 0), episode_text, font=episode_font)
-            episode_height = episode_bbox[3] - episode_bbox[1]
-
-            title_line_height = SOCIAL_TITLE_FONT_SIZE + SOCIAL_LINE_SPACING
-
-            # Center vertically in the bar
-            total_content_height = episode_height + SOCIAL_EPISODE_TITLE_GAP + (len(title_lines) * title_line_height)
-            content_start_y = bar_y + (bar_height - total_content_height) // 2
-
-            # Draw episode number
-            text_x = TITLE_BAR_PADDING
-            draw.text((text_x, content_start_y), episode_text, font=episode_font, fill="white")
-
-            # Draw title lines (below episode)
-            title_y = content_start_y + episode_height + SOCIAL_EPISODE_TITLE_GAP
-            for line in title_lines:
-                draw.text((text_x, title_y), line, font=title_font, fill="white")
-                title_y += title_line_height
-
-            # Add logo in the bar (bottom-right corner)
-            logo = Image.open(LOGO_PATH).convert('RGBA')
-            logo = logo.resize(SOCIAL_LOGO_SIZE, Image.Resampling.LANCZOS)
-            logo_x = img.size[0] - SOCIAL_LOGO_SIZE[0] - TITLE_BAR_PADDING
-            logo_y = img.size[1] - SOCIAL_LOGO_SIZE[1] - TITLE_BAR_PADDING
-            img.paste(logo, (logo_x, logo_y), logo)
+        # Add logo in bottom-right corner
+        logo = Image.open(LOGO_PATH).convert('RGBA')
+        logo = logo.resize(logo_size, Image.Resampling.LANCZOS)
+        logo_x = img.size[0] - logo_size[0] - TITLE_BAR_PADDING
+        logo_y = img.size[1] - logo_size[1] - TITLE_BAR_PADDING
+        img.paste(logo, (logo_x, logo_y), logo)
 
         # Convert to RGB for JPEG
         if img.mode == 'RGBA':
             rgb_img = Image.new('RGB', img.size, (255, 255, 255))
-            rgb_img.paste(img, mask=img.split()[3])  # Use alpha as mask
+            rgb_img.paste(img, mask=img.split()[3])
             img = rgb_img
 
-        # Atomic write: save to temporary file first, then rename
-        import tempfile
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Create temp file in same directory to ensure same filesystem
-        temp_fd, temp_path = tempfile.mkstemp(
-            suffix='.tmp',
-            dir=output_path.parent,
-            prefix=output_path.stem + '_'
-        )
-
-        try:
-            # Close the file descriptor, we'll use the path
-            os.close(temp_fd)
-
-            # Save to temporary file
-            img.save(temp_path, 'JPEG', quality=95, optimize=True)
-
-            # Atomic rename (POSIX guarantees this is atomic)
-            os.replace(temp_path, output_path)
-
-            print(f"  ✓ Saved: {output_path}")
-            return True
-        except Exception as e:
-            # Clean up temp file if something went wrong
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except Exception:
-                pass
-            raise e
+        # Atomic write
+        atomic_write(output_path, lambda path: img.save(path, 'JPEG', quality=95, optimize=True))
+        print(f"  ✓ Saved: {output_path}")
+        return True
 
     except (OSError, IOError, ValueError) as e:
         logger.error(f"Post-processing failed: {e}")
@@ -1600,8 +1817,8 @@ async def generate_with_providers(
 
     all_results = {}
 
-    # Use flat output directory
-    output_dir = OUTPUT_DIR
+    # Use episode-numbered subdirectory
+    output_dir = OUTPUT_DIR / str(episode_num)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     async with aiohttp.ClientSession() as session:
@@ -1636,14 +1853,8 @@ async def generate_with_providers(
 
 def save_concepts(episode_num: int, episode_title: str, concepts: List[Tuple[str, str]], selected_index: int):
     """Save concepts to JSON file for reference (atomic write)"""
-    import tempfile
-
     # Convert concepts to dict format for JSON
-    concepts_list = [
-        {"concept": concept, "provider": provider}
-        for concept, provider in concepts
-    ]
-
+    concepts_list = [{"concept": concept, "provider": provider} for concept, provider in concepts]
     selected_concept, selected_provider = concepts[selected_index - 1]
 
     concepts_data = {
@@ -1655,34 +1866,14 @@ def save_concepts(episode_num: int, episode_title: str, concepts: List[Tuple[str
         "selected_provider": selected_provider
     }
 
-    # Save to flat output directory
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    concepts_file = OUTPUT_DIR / f"{episode_num}-concepts.json"
-
-    # Atomic write: write to temp file first, then rename
-    temp_fd, temp_path = tempfile.mkstemp(
-        suffix='.tmp',
-        dir=OUTPUT_DIR,
-        prefix=f"{episode_num}-concepts_"
-    )
+    # Save to episode-numbered subdirectory
+    episode_dir = OUTPUT_DIR / str(episode_num)
+    concepts_file = episode_dir / f"{episode_num}-concepts.json"
 
     try:
-        # Write JSON to temp file
-        with os.fdopen(temp_fd, 'w') as f:
-            json.dump(concepts_data, f, indent=2)
-
-        # Atomic rename
-        os.replace(temp_path, concepts_file)
-
+        atomic_write(concepts_file, lambda path: json.dump(concepts_data, open(path, 'w'), indent=2))
         print(f"  ✓ Concepts saved to: {concepts_file}")
     except Exception as e:
-        # Clean up temp file if something went wrong
-        try:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-        except Exception:
-            pass
         logger.error(f"Failed to save concepts: {e}")
         raise e
 

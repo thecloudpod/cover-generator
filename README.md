@@ -14,7 +14,11 @@ Automated podcast cover image generator using OpenAI and Google Gemini AI APIs.
 - **Multiple Formats**: Generates both square (3000×3000) podcast covers and social media (1200×630) variants
 - **Total Output**: 16 images per episode (8 square + 8 social: 4 from OpenAI, 4 from Gemini)
 - **Professional Overlay Bar**: Semi-transparent bar at bottom with grouped episode number and title for clean, professional look
-- **Character Consistency**: Bolt mascot passed as reference image; hosts described via detailed text prompts (names, hair, beards)
+- **5-Reference Image Strategy**: Both AI providers use up to 5 reference images (Bolt + 4 hosts) with identity locking for maximum character consistency
+  - **PIXEL PRIORITY MODE**: References processed in hierarchy order to prevent feature averaging
+  - **Identity Lock Protocol**: 100% facial accuracy from reference photos translated to flat illustration style
+  - Real photos of hosts translated into recognizable illustrated versions
+- **Smart Host Duplication**: For concepts requiring crowds (org charts, teams, large groups), AI can duplicate hosts with distinguishing variations (glasses, accessories, costume changes) while maintaining core recognizability
 - **Scene Consistency**: Each provider generates one base image, reused for both square and social variants with different layouts
 - **Rate Limiting**: Handles API rate limits automatically
 - **Creative & Varied**: Concepts use literal interpretations, visual puns, and wordplay based on the episode title
@@ -90,27 +94,28 @@ The script will:
 
 ## Output Structure
 
-All files are saved to a flat `output/` directory with descriptive filenames:
+All files are organized into episode-numbered subdirectories within `output/`:
 
 ```
 output/
-├── 337-we-were-right-gemini-1.jpg          # Gemini variant 1 (Bolt only) - 3000×3000
-├── 337-we-were-right-gemini-2.jpg          # Gemini variant 2 (Bolt only) - 3000×3000
-├── 337-we-were-right-gemini-3.jpg          # Gemini variant 3 (Bolt + hosts) - 3000×3000
-├── 337-we-were-right-gemini-4.jpg          # Gemini variant 4 (Bolt + hosts) - 3000×3000
-├── 337-we-were-right-social-gemini-1.jpg   # Gemini variant 1 social - 1200×630
-├── 337-we-were-right-social-gemini-2.jpg   # Gemini variant 2 social - 1200×630
-├── 337-we-were-right-social-gemini-3.jpg   # Gemini variant 3 social - 1200×630
-├── 337-we-were-right-social-gemini-4.jpg   # Gemini variant 4 social - 1200×630
-├── 337-we-were-right-openai-1.jpg          # OpenAI variant 1 (Bolt only) - 3000×3000
-├── 337-we-were-right-openai-2.jpg          # OpenAI variant 2 (Bolt only) - 3000×3000
-├── 337-we-were-right-openai-3.jpg          # OpenAI variant 3 (Bolt + hosts) - 3000×3000
-├── 337-we-were-right-openai-4.jpg          # OpenAI variant 4 (Bolt + hosts) - 3000×3000
-├── 337-we-were-right-social-openai-1.jpg   # OpenAI variant 1 social - 1200×630
-├── 337-we-were-right-social-openai-2.jpg   # OpenAI variant 2 social - 1200×630
-├── 337-we-were-right-social-openai-3.jpg   # OpenAI variant 3 social - 1200×630
-├── 337-we-were-right-social-openai-4.jpg   # OpenAI variant 4 social - 1200×630
-└── 337-concepts.json                       # Saved concepts for reference
+└── 337/
+    ├── 337-we-were-right-gemini-1.jpg          # Gemini variant 1 (Bolt only) - 3000×3000
+    ├── 337-we-were-right-gemini-2.jpg          # Gemini variant 2 (Bolt only) - 3000×3000
+    ├── 337-we-were-right-gemini-3.jpg          # Gemini variant 3 (Bolt + hosts) - 3000×3000
+    ├── 337-we-were-right-gemini-4.jpg          # Gemini variant 4 (Bolt + hosts) - 3000×3000
+    ├── 337-we-were-right-social-gemini-1.jpg   # Gemini variant 1 social - 1200×630
+    ├── 337-we-were-right-social-gemini-2.jpg   # Gemini variant 2 social - 1200×630
+    ├── 337-we-were-right-social-gemini-3.jpg   # Gemini variant 3 social - 1200×630
+    ├── 337-we-were-right-social-gemini-4.jpg   # Gemini variant 4 social - 1200×630
+    ├── 337-we-were-right-openai-1.jpg          # OpenAI variant 1 (Bolt only) - 3000×3000
+    ├── 337-we-were-right-openai-2.jpg          # OpenAI variant 2 (Bolt only) - 3000×3000
+    ├── 337-we-were-right-openai-3.jpg          # OpenAI variant 3 (Bolt + hosts) - 3000×3000
+    ├── 337-we-were-right-openai-4.jpg          # OpenAI variant 4 (Bolt + hosts) - 3000×3000
+    ├── 337-we-were-right-social-openai-1.jpg   # OpenAI variant 1 social - 1200×630
+    ├── 337-we-were-right-social-openai-2.jpg   # OpenAI variant 2 social - 1200×630
+    ├── 337-we-were-right-social-openai-3.jpg   # OpenAI variant 3 social - 1200×630
+    ├── 337-we-were-right-social-openai-4.jpg   # OpenAI variant 4 social - 1200×630
+    └── 337-concepts.json                       # Saved concepts for reference
 ```
 
 **Filename Format:**
@@ -183,16 +188,27 @@ Each image includes:
 - **Typography**: Helvetica with clean white text on semi-transparent overlay bar
 - **Overlay Bar**: Semi-transparent black bar (650px square, 160px social) at bottom for title/logo
 - **Logo**: Positioned in overlay bar (bottom-right corner)
-- **Character References**:
-  - Bolt: Reference image (bolt.png) passed to both providers
-  - Hosts: Detailed text descriptions (Jonathan: short dark hair/clean-shaven, Justin: bald/gray beard, Matthew: balding/brown beard, Ryan: wavy hair/brown beard)
+- **Character References** (5-Reference Strategy):
+  - **Reference Hierarchy** (priority order for identity locking):
+    1. Bolt: Mascot reference PNG (canonical source of truth)
+    2. Jonathan Baker: Host 1 photo reference (face/proportions)
+    3. Justin Brodley: Host 2 photo reference (face/proportions)
+    4. Matthew Kohn: Host 3 photo reference (face/proportions)
+    5. Ryan Lucas: Host 4 photo reference (face/proportions)
+  - **Identity Lock Protocol**: Each reference assigned specific role to prevent feature averaging
+  - **Translation Strategy**: Real photos → flat illustration style while maintaining facial recognizability
+  - **Smart Duplication**: When concepts need crowds/org charts, hosts can be duplicated with variations (glasses, accessories, different outfits) while maintaining recognizable core features
 - **Reference Image Support**:
-  - OpenAI: Uses `images.edit()` endpoint with `input_fidelity: high` for Bolt reference
-  - Gemini: Native reference image support via inline_data for Bolt reference
+  - **OpenAI**: Uses `images.edit()` endpoint with `input_fidelity: high` for up to 5 references
+  - **Gemini**: Gemini 3 Pro Image (Nano Banana) supports up to 14 references via inline_data (we use 5)
 - **Smart Aspect Ratio Handling**: Social images use blurred letterbox backgrounds to avoid distortion when converting square to landscape
 - **AI Models**:
-  - OpenAI: gpt-image-1 via edit endpoint with high input fidelity, GPT-4 (concepts)
-  - Gemini: gemini-2.5-flash-image with reference images, gemini-2.5-flash (concepts)
+  - **OpenAI**:
+    - Concepts: `gpt-5.2` with reasoning_effort: medium (thinking-enabled)
+    - Images: `gpt-image-1.5` via edit endpoint with 5-reference support
+  - **Gemini**:
+    - Concepts: `gemini-3-flash-preview` with thinkingLevel: medium
+    - Images: `gemini-3-pro-image-preview` (Nano Banana Pro - 4K native)
 
 ## Files
 
