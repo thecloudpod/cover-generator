@@ -60,6 +60,8 @@ SOCIAL_LOGO_SIZE = (160, 160)
 # Protected area for title/logo (overlay bar at bottom)
 SQUARE_BAR_HEIGHT = 650   # Height of overlay bar for square images
 SOCIAL_BAR_HEIGHT = 160   # Height of overlay bar for social images
+SQUARE_BAR_HEIGHT_COMPACT = 420   # Smaller overlay for comic strip layouts
+SOCIAL_BAR_HEIGHT_COMPACT = 110   # Smaller overlay for comic strip layouts
 TITLE_BAR_ALPHA = 160     # Semi-transparent black bar (0=transparent, 255=opaque) - lighter for visibility
 TITLE_BAR_PADDING = 50    # Padding inside the bar
 
@@ -458,11 +460,141 @@ HUMOR & STORYTELLING:
 - Render ONLY what is described in the concept - do not add extra elements"""
 
 
-def build_concept_prompt(episode_title: str, previous_concepts: List[str] = None, keywords: str = None) -> str:
-    """Build prompt for concept generation (text-only phase)"""
+# Creative lenses for concept variety - each produces a fundamentally different type of concept
+CREATIVE_LENSES = [
+    {
+        "name": "pop_culture_parody",
+        "label": "Pop Culture Parody",
+        "instruction": """CREATIVE LENS: POP CULTURE PARODY
+First, ask yourself: Does this title reference a movie, TV show, meme, famous quote, or cultural moment?
+If so, create a concept that PARODIES that reference. Reimagine the iconic scene/moment with Cloud Pod characters and tech humor.
+If there's no obvious reference, parody a well-known visual format (movie poster, album cover, famous painting, meme template) that fits the title's mood.
+Examples:
+- "AI'll be Back" → Bolt as the Terminator in sunglasses, walking away from an explosion, chrome hand giving thumbs up
+- "The Great Migration" → Hosts as wildebeest crossing a river of cloud logos, nature-documentary style
+- "Jimmy Droptables" → Courtroom drama parody - Jimmy on trial, evidence table literally collapsing"""
+    },
+    {
+        "name": "hero_shot",
+        "label": "Hero Shot",
+        "instruction": """CREATIVE LENS: HERO SHOT
+Create a SIMPLE, bold composition with ONE main subject, ONE clear action, and a strong background.
+Think podcast cover or movie poster - this should read instantly at thumbnail size.
+Keep it to 3 elements max. No busy scenes, no Rube Goldberg chains of events.
+The image should tell the story through character expression, pose, and a single strong visual metaphor.
+Examples:
+- "Just-in-Time Secrets" → Bolt mid-sneak through a vault door, clutching a folder, guilty grin
+- "Scaling Down" → Single towering building shrinking like a deflating balloon, Bolt watching from below
+- "AI'll be Back" → Bolt in aviator sunglasses, half his face chrome circuitry, staring at camera"""
+    },
+    {
+        "name": "genre_shift",
+        "label": "Genre Shift",
+        "instruction": """CREATIVE LENS: GENRE SHIFT
+Take the title's story and tell it in a COMPLETELY UNEXPECTED genre or setting. Drop the tech/office context entirely.
+Reimagine it as: a Western, nature documentary, cooking show, sports broadcast, fairy tale, noir detective story, space opera, medieval quest, courtroom drama, heist film, or any other genre that creates a funny contrast.
+The humor comes from the clash between the tech topic and the unexpected world.
+Examples:
+- "Container Orchestration" → Medieval conductor Bolt directing an orchestra of shipping containers in a concert hall
+- "AWS Layoffs" → Old Western ghost town, tumbleweeds rolling past abandoned "AWS Saloon"
+- "Zero Trust Security" → Film noir detective scene, everyone in trench coats eyeing each other suspiciously"""
+    },
+    {
+        "name": "storytelling_moment",
+        "label": "Storytelling Moment",
+        "instruction": """CREATIVE LENS: STORYTELLING MOMENT
+Show a HUMAN MOMENT that tells the real-world story behind the title. No visual puns, no mechanisms, no clever wordplay.
+Think photojournalism or editorial illustration: what would an artist draw to capture the REAL story this episode is about?
+Characters should be REACTING TO or WITNESSING events, not causing them. Bolt and the hosts can be observers, bystanders, or participants in an emotional scene.
+Zero text labels. The scene speaks for itself through body language, setting, and composition.
+Examples:
+- "AWS Layoffs: Scaling Down" → Somber employees with cardboard boxes filing out of a glass office tower, the Cloud Pod hosts and Bolt watching from the sidewalk
+- "Just-in-Time Secrets" → Bolt sitting alone at a desk at 2am, screen glow on face, surrounded by scattered confidential folders
+- "The Great Cloud Migration" → Caravan of people carrying servers on their backs, walking a long road toward a distant glowing cloud city"""
+    },
+    {
+        "name": "visual_pun",
+        "label": "Visual Pun",
+        "instruction": """CREATIVE LENS: VISUAL PUN
+Find the wordplay or double meaning in the title and make it LITERALLY VISUAL.
+Take one or two key words and show their alternate meaning as a physical reality.
+Keep it focused on ONE strong pun rather than trying to literalize every word.
+Limit to 1-2 small text labels max - if the image needs labels to be funny, the visual isn't strong enough.
+Examples:
+- "Jimmy Droptables" → Bolt yanking a tablecloth off a fancy dinner table, database records flying like dishes
+- "Scaling Down" → Bolt on a fish being de-scaled with a giant scraper, tiny employees falling off like scales
+- "Container Orchestration" → Bolt conducting an orchestra where all the instruments are shipping containers"""
+    },
+    {
+        "name": "minimalist",
+        "label": "Minimalist / Abstract",
+        "instruction": """CREATIVE LENS: MINIMALIST / ABSTRACT
+Distill the title down to ONE iconic image. Think New Yorker cover, editorial illustration, or graphic design poster.
+Use negative space, bold color, and a single striking visual element. No complex scenes or multiple characters.
+This should be visually elegant and immediately readable. Fewer elements = stronger impact.
+Examples:
+- "AI'll be Back" → Single chrome endoskeleton hand emerging from a cloud, giving thumbs up
+- "Zero Trust" → A single handshake where both hands are crossed fingers behind their backs
+- "Serverless Everything" → Pristine empty server rack with a single tumbleweed rolling through"""
+    },
+    {
+        "name": "mood_piece",
+        "label": "Mood & Atmosphere",
+        "instruction": """CREATIVE LENS: MOOD & ATMOSPHERE
+Instead of explaining the joke, FEEL it. Create a scene driven by emotion, lighting, and atmosphere rather than clever mechanisms.
+What's the emotional core of this title? Capture that feeling through dramatic lighting, color temperature, and character body language.
+This can be dramatic, ironic, melancholy, suspenseful, triumphant, eerie, or absurdly serene.
+No text labels in the scene. No visual puns. No mechanisms or levers. Just a moment and a mood.
+Examples:
+- "Just-in-Time Secrets" → Dark datacenter corridor, single spotlight on Bolt tiptoeing past, long dramatic shadows
+- "AI'll be Back" → Foggy server room at night, single red eye glowing in the distance, ominous silhouette
+- "Container Orchestration" → Vast harbor at golden hour, thousands of shipping containers stretching to the horizon, Bolt conducting from a tiny podium"""
+    },
+    {
+        "name": "everyday_metaphor",
+        "label": "Everyday Metaphor",
+        "instruction": """CREATIVE LENS: EVERYDAY METAPHOR
+Find a completely UNRELATED real-world situation that captures the same FEELING or DYNAMIC as the title.
+Don't literalize the tech words. Instead, ask: "What everyday experience feels like this?"
+Map the tech concept onto something warm, human, and immediately relatable - no tech knowledge needed to get the joke.
+The humor comes from the unexpected parallel between the tech story and the mundane situation.
+Examples:
+- "AWS Layoffs: Scaling Down" → A gardener tenderly pruning back a massive overgrown hedge, clippings piling up
+- "Prices Go Both Ways, Raises GPU Costs" → A kid's helium balloon slipping from their hand and floating away while they reach for it
+- "Crawlers Running the Asylum" → A golden retriever sitting in the driver's seat of a car, paws on the wheel, looking way too confident
+- "Oracle Discovers the Dark Side" → A kid in pajamas sneaking cookies from a jar after bedtime"""
+    },
+    {
+        "name": "comic_strip",
+        "label": "Comic Strip",
+        "instruction": """CREATIVE LENS: COMIC STRIP
+Create a 4-PANEL comic strip that tells the episode's story as a sequential narrative with a punchline.
+Layout: 2x2 grid (two panels on top, two on bottom). The BOTTOM of the image will be covered by the show title overlay, so:
+- TOP TWO PANELS: Set up the joke (panels 1 and 2, these are fully visible)
+- BOTTOM TWO PANELS: Deliver the punchline in the UPPER PORTION of these panels. Keep the very bottom edge of the bottom panels unimportant (simple backgrounds, no faces or key details down there)
+Each panel should be DEAD SIMPLE - one character, one action, minimal background. Think XKCD, Dilbert, or The Oatmeal.
+Short speech bubbles or captions are fine (this is a comic after all), but keep text minimal - 3-5 words per panel max.
+Describe all 4 panels in order: Panel 1 (top-left), Panel 2 (top-right), Panel 3 (bottom-left), Panel 4 (bottom-right).
+Examples:
+- "AWS Layoffs: Scaling Down" → Panel 1: Bolt at whiteboard writing "Scale OUT!" / Panel 2: Boss taps shoulder, points at budget chart / Panel 3: Bolt erases "OUT", writes "Down" / Panel 4: Bolt alone in a huge empty office, tiny wave
+- "Jimmy Droptables" → Panel 1: "Meet our new SQL assistant!" / Panel 2: Jimmy smiles, types "DROP TABLE" / Panel 3: Hosts stare in horror at empty screen / Panel 4: Jimmy shrugs, "Feature, not a bug" """
+    },
+]
+
+
+def build_concept_prompt(episode_title: str, previous_concepts: List[str] = None, keywords: str = None, creative_lens: dict = None) -> str:
+    """Build prompt for concept generation (text-only phase)
+
+    Args:
+        episode_title: The episode title to generate concepts for
+        previous_concepts: List of previously generated concept texts to avoid duplicating
+        keywords: Optional keywords to steer creative direction
+        creative_lens: Optional dict with 'name', 'label', and 'instruction' keys
+                      specifying the creative approach for this concept
+    """
 
     # Build dynamic sections
-    sections = ["""You are the creative director for The Cloud Pod, a tech podcast famous for visual wordplay and literal humor."""]
+    sections = ["""You are the creative director for The Cloud Pod, a tech podcast. You create bold, varied visual concepts for podcast cover art."""]
 
     # Detect if title mentions AI/agent/bot/robot - these should map to Bolt
     ai_keywords = ['ai', 'agent', 'bot', 'robot', 'artificial', 'intelligence', 'llm', 'model', 'chatbot']
@@ -473,57 +605,87 @@ def build_concept_prompt(episode_title: str, previous_concepts: List[str] = None
 
 Episode Title: '{episode_title}'
 
-YOUR TASK: Create ONE completely NEW visual scene based ONLY on '{episode_title}'. Take the words in this title literally and create a specific, original scene.
+YOUR TASK: Create ONE completely NEW visual concept for a podcast cover based on '{episode_title}'.
 
-APPROACH - How to interpret titles literally:
-- Take individual WORDS literally (if title says 'wardrobe', show actual clothing; if it says 'layers', show a visual stack)
-- Convert abstract concepts into PHYSICAL objects (if title mentions 'conversational', show someone literally talking/yelling)
-- Find the VISUAL PUN in the title wording
-- Create SPECIFIC details (not vague 'tech vibes' but concrete physical objects, readable text, tangible props)
-- Exaggerate for HUMOR (impossible proportions, absurd scales, playful contradictions)
+BEFORE YOU START: Ask yourself these questions about the title:
+1. Is it referencing a movie, meme, saying, or cultural moment? If so, consider riffing on that.
+2. Is there a double meaning or wordplay? What's the joke underneath the surface?
+3. What FEELING does this title evoke? (funny, ominous, triumphant, absurd, bittersweet?)
+4. What's the simplest possible image that captures the essence?""")
 
-CONCEPT VARIETY:
-- Balance between CHARACTER-FOCUSED concepts and OBJECT/ENVIRONMENT concepts
-- Character-based concepts often work great for storytelling and humor
-- Minimalist object/environment concepts (empty server rack, floating cloud, literal interpretation) can also be effective
-- Choose the approach that best serves the specific visual pun
+    # Add the specific creative lens if provided
+    if creative_lens:
+        sections.append(f"""
 
-IMPORTANT: Do NOT reuse visual elements from other episodes. Each concept must be completely original based on THIS episode title.""")
+{creative_lens['instruction']}""")
+    else:
+        # Fallback if no lens specified (e.g., for "generate more" or custom flows)
+        sections.append("""
+
+APPROACH: Choose the single best creative angle for this title. You might:
+- Parody a pop culture reference the title is making
+- Create a simple hero shot with one character and one strong visual
+- Shift to an unexpected genre (Western, noir, fairy tale, nature documentary)
+- Capture the mood/emotion rather than explaining the joke
+- Find a visual pun on one key word
+- Go minimalist with one bold iconic image""")
+
+    sections.append(f"""
+
+QUALITY GUIDELINES:
+- Be SPECIFIC about the scene (what do we see? where is it? what's the lighting?) but keep it SIMPLE - 3-5 key elements max
+- The concept should read at thumbnail size. If the scene is too busy to grasp in one glance, simplify
+- Maximum 1-2 text labels in the scene. If the image needs labels to make sense, the visual isn't strong enough. Many great concepts have ZERO labels
+- Characters don't always need to be the ACTIVE AGENT doing something clever. Sometimes the most powerful image is characters WITNESSING, REACTING TO, or simply EXISTING IN a scene
+- Do NOT reuse visual elements from other episodes
+
+IMPORTANT:
+- Do NOT just decompose the title word-by-word into literal objects arranged in a scene
+- Do NOT default to "Bolt pulls/pushes/operates a [mechanism]" - that's a crutch
+- Find the deeper joke, the cultural reference, or the emotional core of the title""")
 
     if previous_concepts:
         concepts_list = "\n".join(f"{i}. {c}" for i, c in enumerate(previous_concepts, 1))
-        sections.append(f"\n\nPREVIOUS CONCEPTS ALREADY GENERATED (do NOT repeat these ideas):\n{concepts_list}\n\nYour concept must be COMPLETELY DIFFERENT from these.")
+        sections.append(f"""
+
+PREVIOUS CONCEPTS ALREADY GENERATED (do NOT repeat these ideas or use the same creative approach):
+{concepts_list}
+
+Your concept must use a FUNDAMENTALLY DIFFERENT creative angle from these - not just different props in the same type of scene.""")
 
     if keywords and keywords.strip():
-        sections.append(f"\n\nKEYWORD GUIDANCE: The user wants concepts that incorporate or emphasize these themes: {keywords.strip()}\nUse these keywords to steer your creative direction while still interpreting the episode title literally.")
+        sections.append(f"""
+
+KEYWORD GUIDANCE: The user wants concepts that incorporate or emphasize these themes: {keywords.strip()}
+Use these keywords to steer your creative direction.""")
 
     # Dynamic character guidance based on title content
     if mentions_ai:
         sections.append(f"""
 
-CHARACTER GUIDANCE - IMPORTANT FOR THIS EPISODE:
-This title mentions AI/agents/bots, which should naturally map to BOLT, our cloud robot mascot!
-
-- **Bolt** - The Cloud Pod's blue cloud robot mascot - PERFECT for representing AI agents, bots, or robots in the title
-  → When the title says "AI Agent" or similar, Bolt IS that agent
-  → Example: If title mentions "AI Agent Can't Keep Its Mouth Shut" → Show Bolt with mouth taped shut, secrets escaping, etc.
-  → Bolt works great as the main character for comedy, mishaps, and visual gags
-
-- **The Four Hosts** - Jonathan, Justin, Matthew, Ryan - Use when you need human characters or a team dynamic
-
-PRIORITY: Since this title mentions AI/agents, strongly consider using Bolt as the central character.""")
+CHARACTER GUIDANCE:
+This title mentions AI/agents/bots. Our mascot **Bolt** (blue cloud robot) naturally represents AI in our universe.
+- When the title says "AI Agent" or similar, Bolt IS that agent
+- **The Four Hosts** (Jonathan, Justin, Matthew, Ryan) are available for human character dynamics
+- You can also create concepts with NO characters - object-only or environmental scenes work too""")
     else:
         sections.append(f"""
 
-AVAILABLE CHARACTERS (use when they enhance the concept):
-- **Bolt** - The Cloud Pod's blue cloud robot mascot - great for tech concepts, comedy, and character-driven visual gags
-- **The Four Hosts** - Jonathan, Justin, Matthew, Ryan - use for human-focused concepts or team dynamics
+AVAILABLE CHARACTERS (use when they enhance the concept, or skip them entirely):
+- **Bolt** - Blue cloud robot mascot - great for comedy and character-driven concepts
+- **The Four Hosts** - Jonathan, Justin, Matthew, Ryan - for human-focused scenes
+- No characters at all - object-only, environmental, or abstract concepts are equally valid""")
 
-Choose character-based or environment-based concepts based on what best serves the visual pun.""")
+    # Tailor the output format instruction to the lens type
+    if creative_lens and creative_lens['name'] == 'comic_strip':
+        sections.append(f"""
 
-    sections.append(f"""
+Describe all 4 panels concisely. Use the format: "Panel 1: ... / Panel 2: ... / Panel 3: ... / Panel 4: ..."
+Keep each panel description to one short sentence. No preamble, no explanation - just the panel descriptions.""")
+    else:
+        sections.append(f"""
 
-Return ONLY one sentence describing the specific visual scene based on '{episode_title}':""")
+Return ONLY the concept as a single concise sentence describing the visual scene. No preamble, no explanation, no alternatives - just the concept itself.""")
 
     return "".join(sections)
 
@@ -724,12 +886,59 @@ Do not skip any characters - all five must be present and clearly visible."""
 
 Bolt MUST appear in this image, integrated naturally into the concept."""
 
+    # Detect comic strip concepts and adjust instructions
+    is_comic_strip = concept.strip().lower().startswith("panel 1")
+
+    # For comic strips, override the composition guidance to work with 2x2 grid
+    if is_comic_strip:
+        dimension_guidance = f"""{format_type}
+
+COMIC STRIP LAYOUT:
+This concept is a 4-panel comic strip. Render it as a 2x2 grid that fits ENTIRELY in the UPPER 85% of the image.
+
+PANEL ARRANGEMENT:
+- TOP ROW: Panel 1 (top-left) and Panel 2 (top-right) - setup panels
+- BOTTOM ROW: Panel 3 (bottom-left) and Panel 4 (bottom-right) - punchline panels
+- Clear visible borders/gutters between all 4 panels
+
+PANEL PROPORTIONS: Each panel is a WIDE HORIZONTAL RECTANGLE (roughly 2:1 width-to-height), like widescreen movie frames or newspaper comic strip panels. NOT square panels.
+
+DEAD ZONE: The bottom ~15% of the image will be covered by a small title overlay.
+- Leave the bottom ~15% as simple solid background color, panel border color, or empty space
+- ALL four panels including panels 3 and 4 must be FULLY VISIBLE above this dead zone
+- No faces, speech bubbles, or important details in the bottom 15%
+
+TEXT IN IMAGE: ONLY render text that appears in the panel descriptions (speech bubbles, captions, on-screen labels). Do NOT render any character descriptions, instructions, or prompt text as visible text in the image."""
+    else:
+        dimension_guidance = f"""{format_type}
+
+⚠️ CRITICAL COMPOSITION FRAMING - READ CAREFULLY:
+The lower 25% of this image will be COMPLETELY COVERED by a text overlay bar in post-production. ANY important visual elements placed in the bottom quarter will be HIDDEN and WASTED.
+
+MANDATORY PLACEMENT RULES:
+• ALL main subjects, characters, faces, key objects: Position in UPPER 75% ONLY (top and middle areas)
+• Character faces: Must be in upper-middle to upper portion - NEVER in bottom quarter
+• Important visual elements: Keep in top 3/4 of frame - pretend the bottom 25% doesn't exist for composition purposes
+• Bottom quarter use ONLY: Simple environmental grounding (solid floors, horizon lines, gradient sky/background, atmospheric effects)
+• Think of the canvas as 75% usable space for content + 25% reserved background space
+
+COMPOSITION ANALOGY: Like a magazine cover where the bottom has the magazine title bar - all the interesting content stays ABOVE that bar.
+
+Visual weight and focal points: Upper 75% of frame. Bottom 25%: Just background fill."""
+
+    # For comic strips, add a reminder not to render character descriptions as image text
+    comic_text_warning = ""
+    if is_comic_strip:
+        comic_text_warning = """
+
+TEXT RENDERING WARNING: The character descriptions below are RENDERING INSTRUCTIONS for how to draw the characters. Do NOT display any of this descriptive text in the image. Only render text that appears in speech bubbles or captions as described in the panel concept."""
+
     return f"""{BASE_STYLE_PROMPT}
 
 SPECIFIC EPISODE CONCEPT:
 {concept}
 
-CRITICAL: Render the elements described in the concept above. Do not add unrelated objects or text that are not explicitly mentioned in the concept.{character_requirement}
+CRITICAL: Render the elements described in the concept above. Do not add unrelated objects or text that are not explicitly mentioned in the concept.{character_requirement}{comic_text_warning}
 {bolt_guidance}
 {hosts_guidance}
 
@@ -776,12 +985,13 @@ async def generate_concept_openai(
     api_key: str,
     episode_title: str,
     previous_concepts: List[str] = None,
-    keywords: str = None
+    keywords: str = None,
+    creative_lens: dict = None
 ) -> Optional[str]:
     """Generate a creative concept using OpenAI GPT-4"""
     payload = {
         "model": OPENAI_CHAT_MODEL,
-        "messages": [{"role": "user", "content": build_concept_prompt(episode_title, previous_concepts, keywords)}],
+        "messages": [{"role": "user", "content": build_concept_prompt(episode_title, previous_concepts, keywords, creative_lens)}],
         "max_completion_tokens": 2000,
         "reasoning_effort": "medium"
     }
@@ -798,11 +1008,12 @@ async def generate_concept_gemini(
     api_key: str,
     episode_title: str,
     previous_concepts: List[str] = None,
-    keywords: str = None
+    keywords: str = None,
+    creative_lens: dict = None
 ) -> Optional[str]:
     """Generate a creative concept using Google Gemini"""
     payload = {
-        "contents": [{"parts": [{"text": build_concept_prompt(episode_title, previous_concepts, keywords)}]}],
+        "contents": [{"parts": [{"text": build_concept_prompt(episode_title, previous_concepts, keywords, creative_lens)}]}],
         "generationConfig": {
             "temperature": 0.9,
             "maxOutputTokens": 2048
@@ -816,29 +1027,40 @@ async def generate_concept_gemini(
 
 
 async def generate_concepts(episode_title: str) -> List[Tuple[str, str]]:
-    """Generate 6 creative concepts (3 from each provider, sequentially to ensure variety)
+    """Generate one concept per creative lens, split across providers.
+    Each concept uses a different creative lens to guarantee structural diversity.
     Returns list of tuples: (concept_text, provider_name)
     """
 
-    print(f"\n🎨 Generating creative concepts for: \"{episode_title}\"")
+    num_lenses = len(CREATIVE_LENSES)
+    print(f"\n🎨 Generating {num_lenses} creative concepts for: \"{episode_title}\"")
     print("=" * 70)
 
     concepts = []
     previous_concepts = []
 
     async with aiohttp.ClientSession() as session:
-        # Generate 3 concepts from each provider SEQUENTIALLY, each seeing previous concepts
-        # This ensures variety and prevents duplicates
-
+        # Build provider list - one concept per lens, alternating providers
         providers = []
-        if OPENAI_API_KEY:
-            providers.extend([("OpenAI", generate_concept_openai, OPENAI_API_KEY)] * 3)
-        if GOOGLE_API_KEY:
-            providers.extend([("Gemini", generate_concept_gemini, GOOGLE_API_KEY)] * 3)
+        for i, lens in enumerate(CREATIVE_LENSES):
+            if OPENAI_API_KEY and GOOGLE_API_KEY:
+                # Alternate between providers
+                if i % 2 == 0:
+                    providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY, lens))
+                else:
+                    providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lens))
+            elif OPENAI_API_KEY:
+                providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY, lens))
+            elif GOOGLE_API_KEY:
+                providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lens))
 
-        for provider_name, generate_func, api_key in providers:
-            print(f"  Generating {provider_name} concept {len(concepts) + 1}/6...")
-            result = await retry_with_backoff(generate_func, session, api_key, episode_title, previous_concepts)
+        for provider_name, generate_func, api_key, lens in providers:
+            print(f"  Generating {provider_name} concept {len(concepts) + 1}/{num_lenses} [{lens['label']}]...")
+            result = await retry_with_backoff(
+                generate_func, session, api_key, episode_title, previous_concepts,
+                None,  # keywords
+                lens   # creative_lens
+            )
 
             if isinstance(result, str) and result:
                 concepts.append((result, provider_name))
@@ -846,13 +1068,14 @@ async def generate_concepts(episode_title: str) -> List[Tuple[str, str]]:
             else:
                 print(f"  ⚠️  {provider_name} concept generation failed")
 
-    # Require at least 6 concepts
-    if len(concepts) < 6:
-        print(f"\n❌ Error: Only generated {len(concepts)} concepts, need 6")
+    # Require at least half the lenses to succeed
+    min_concepts = num_lenses // 2
+    if len(concepts) < min_concepts:
+        print(f"\n❌ Error: Only generated {len(concepts)} concepts, need at least {min_concepts}")
         print("Please check API keys and try again.")
         return []
 
-    return concepts[:6]  # Return exactly 6 concepts
+    return concepts
 
 
 async def generate_more_concepts(
@@ -881,30 +1104,39 @@ async def generate_more_concepts(
     new_concepts = []
     previous_concepts = [concept for concept, _ in existing_concepts]
 
+    # Pick creative lenses that haven't been used yet, cycling through if needed
+    num_existing = len(existing_concepts)
+    lenses_for_more = []
+    for i in range(count):
+        lens_idx = (num_existing + i) % len(CREATIVE_LENSES)
+        lenses_for_more.append(CREATIVE_LENSES[lens_idx])
+
     async with aiohttp.ClientSession() as session:
         # Alternate between providers for variety
         providers = []
         if OPENAI_API_KEY and GOOGLE_API_KEY:
             # If both available, alternate
             for i in range(count):
+                lens = lenses_for_more[i]
                 if i % 2 == 0:
-                    providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY))
+                    providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY, lens))
                 else:
-                    providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY))
+                    providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lens))
         elif OPENAI_API_KEY:
-            providers = [("OpenAI", generate_concept_openai, OPENAI_API_KEY)] * count
+            providers = [("OpenAI", generate_concept_openai, OPENAI_API_KEY, lenses_for_more[i]) for i in range(count)]
         elif GOOGLE_API_KEY:
-            providers = [("Gemini", generate_concept_gemini, GOOGLE_API_KEY)] * count
+            providers = [("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lenses_for_more[i]) for i in range(count)]
 
-        for provider_name, generate_func, api_key in providers:
-            print(f"  Generating {provider_name} concept {len(new_concepts) + 1}/{count}...")
+        for provider_name, generate_func, api_key, lens in providers:
+            print(f"  Generating {provider_name} concept {len(new_concepts) + 1}/{count} [{lens['label']}]...")
             result = await retry_with_backoff(
                 generate_func,
                 session,
                 api_key,
                 episode_title,
                 previous_concepts,
-                keywords  # Pass keywords for steering
+                keywords,  # Pass keywords for steering
+                lens       # creative_lens
             )
 
             if isinstance(result, str) and result:
@@ -1037,15 +1269,15 @@ Return ONLY the polished concept:"""
         return None
 
 
-async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_title: str) -> Tuple[int, str, bool]:
-    """Display concepts and get user selection
+async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_title: str) -> Tuple[List[Tuple[int, str]], bool]:
+    """Display concepts and get user selection (supports multi-select)
 
     Args:
-        concepts: List of (concept_text, provider_name) tuples (can grow beyond 6)
+        concepts: List of (concept_text, provider_name) tuples (can grow beyond initial set)
         episode_title: Episode title for refinement prompts
 
     Returns:
-        Tuple of (selected_index, concept_text, should_regenerate)
+        Tuple of (selections, should_regenerate) where selections is a list of (index, concept_text) tuples
     """
 
     while True:  # Outer loop to handle concept additions
@@ -1058,7 +1290,7 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
         print("\n" + "=" * 70)
         concept_range = f"1-{len(concepts)}"
         refine_range = f"R1-R{len(concepts)}"
-        print(f"Commands: [{concept_range}] = Select concept | W = Write your own concept | 0 = Generate 6 new concepts | M = Generate MORE concepts | {refine_range} = Refine concept | X = Exit")
+        print(f"Commands: [{concept_range}] = Select concept(s) (e.g. 3 or 1,3,7) | W = Write your own | 0 = Regenerate | M = More concepts | {refine_range} = Refine | X = Exit")
 
         while True:  # Inner loop for user input
             try:
@@ -1072,7 +1304,7 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                 # Regenerate all
                 if choice == '0':
                     print("\n🔄 Regenerating concepts...")
-                    return 0, "", True
+                    return [], True
 
                 # Write your own concept
                 if choice == 'W':
@@ -1102,28 +1334,24 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                                 edited_concept = input(f"{polished}\n> ").strip()
                                 if edited_concept:
                                     concepts.append((edited_concept, "Custom"))
-                                    return len(concepts), edited_concept, False
+                                    return [(len(concepts), edited_concept)], False
                                 else:
-                                    # User pressed enter without editing, use polished version
                                     concepts.append((polished, "Custom"))
-                                    return len(concepts), polished, False
+                                    return [(len(concepts), polished)], False
                             elif confirm != 'n':
-                                # Add polished concept to list and return it
                                 concepts.append((polished, "Custom"))
-                                return len(concepts), polished, False
+                                return [(len(concepts), polished)], False
                             else:
-                                # User rejected, try original
                                 use_original = input("\nUse your original concept instead? (Y/n): ").strip().lower()
                                 if use_original != 'n':
                                     concepts.append((custom_concept, "Custom"))
-                                    return len(concepts), custom_concept, False
+                                    return [(len(concepts), custom_concept)], False
                         else:
-                            # Polishing failed, offer to use original
                             print("\n⚠️  Polishing failed, but you can still use your original concept.")
                             confirm = input("Use your original concept? (Y/n): ").strip().lower()
                             if confirm != 'n':
                                 concepts.append((custom_concept, "Custom"))
-                                return len(concepts), custom_concept, False
+                                return [(len(concepts), custom_concept)], False
                     else:
                         print("❌ Concept cannot be empty")
                         continue
@@ -1159,7 +1387,7 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                                     print(f"\n✨ Refined concept: {refined}\n")
                                     confirm = input("Use this refined concept? (Y/n): ").strip().lower()
                                     if confirm != 'n':
-                                        return refine_num, refined, False
+                                        return [(refine_num, refined)], False
                             continue
                         else:
                             print(f"Please enter R1-R{len(concepts)} to refine a concept")
@@ -1168,17 +1396,42 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                         print(f"Please enter R# where # is 1-{len(concepts)} (e.g., R3)")
                         continue
 
-                # Select concept
-                choice_num = int(choice)
-                if 1 <= choice_num <= len(concepts):
-                    selected_concept, provider = concepts[choice_num - 1]
-                    print(f"\n✓ Selected #{choice_num} [{provider}]: {selected_concept}\n")
-                    return choice_num, selected_concept, False
-                else:
-                    print(f"Please enter 1-{len(concepts)}, W, 0, M, R#, or X")
+                # Select concept(s) - supports "3" or "1,3,7"
+                # Parse comma-separated numbers
+                selections = []
+                parts = choice.replace(' ', '').split(',')
+                valid = True
+                for part in parts:
+                    try:
+                        num = int(part)
+                        if 1 <= num <= len(concepts):
+                            concept_text, provider = concepts[num - 1]
+                            selections.append((num, concept_text))
+                        else:
+                            print(f"❌ Concept {num} is out of range (1-{len(concepts)})")
+                            valid = False
+                            break
+                    except ValueError:
+                        valid = False
+                        break
+
+                if valid and selections:
+                    if len(selections) == 1:
+                        idx, text = selections[0]
+                        provider = concepts[idx - 1][1]
+                        print(f"\n✓ Selected #{idx} [{provider}]: {text}\n")
+                    else:
+                        print(f"\n✓ Selected {len(selections)} concepts:")
+                        for idx, text in selections:
+                            provider = concepts[idx - 1][1]
+                            print(f"  #{idx} [{provider}]: {text[:80]}...")
+                        print()
+                    return selections, False
+                elif not valid:
+                    print(f"Please enter 1-{len(concepts)} (or comma-separated like 1,3,7), W, 0, M, R#, or X")
 
             except ValueError:
-                print(f"Please enter 1-{len(concepts)}, W, 0, M, R# (e.g., R3), or X")
+                print(f"Please enter 1-{len(concepts)} (or comma-separated like 1,3,7), W, 0, M, R#, or X")
             except KeyboardInterrupt:
                 print("\n\n👋 Exiting...")
                 sys.exit(0)
@@ -1573,9 +1826,14 @@ def process_and_save(
     episode_num: int,
     episode_title: str,
     variant: ImageVariant,
-    output_path: Path
+    output_path: Path,
+    compact_bar: bool = False
 ) -> bool:
-    """Main post-processing pipeline: load → overlay bar → grouped title → logo → save"""
+    """Main post-processing pipeline: load → overlay bar → grouped title → logo → save
+
+    Args:
+        compact_bar: Use smaller overlay bar (for comic strip layouts where bottom panels need more room)
+    """
 
     try:
         # Load image from bytes
@@ -1629,7 +1887,10 @@ def process_and_save(
 
         # Get variant-specific parameters
         is_square = variant == ImageVariant.SQUARE
-        bar_height = SQUARE_BAR_HEIGHT if is_square else SOCIAL_BAR_HEIGHT
+        if compact_bar:
+            bar_height = SQUARE_BAR_HEIGHT_COMPACT if is_square else SOCIAL_BAR_HEIGHT_COMPACT
+        else:
+            bar_height = SQUARE_BAR_HEIGHT if is_square else SOCIAL_BAR_HEIGHT
         episode_font_size = SQUARE_EPISODE_FONT_SIZE if is_square else SOCIAL_EPISODE_FONT_SIZE
         title_font_size = SQUARE_TITLE_FONT_SIZE if is_square else SOCIAL_TITLE_FONT_SIZE
         line_spacing = SQUARE_LINE_SPACING if is_square else SOCIAL_LINE_SPACING
@@ -1719,9 +1980,13 @@ async def generate_single_variant(
     episode_title: str,
     output_dir: Path,
     variant_num: int,
-    semaphore: asyncio.Semaphore = None
+    semaphore: asyncio.Semaphore = None,
+    concept_label: str = ""
 ) -> Tuple[int, Optional[Path], Optional[Path]]:
     """Generate a single variant (both square and social)
+
+    Args:
+        concept_label: Optional label to distinguish concepts in filenames (e.g. "c1", "c2")
 
     Returns tuple of (variant_num, square_path, social_path)
     """
@@ -1745,15 +2010,21 @@ async def generate_single_variant(
             print(f"  ⚠️  {provider.value.capitalize()} variant {variant_num} generation failed")
             return (variant_num, None, None)
 
+        # Detect comic strip concepts for compact overlay bar
+        compact_bar = concept.strip().lower().startswith("panel 1")
+
+        # Build filename with optional concept label for multi-select runs
+        label_part = f"-{concept_label}" if concept_label else ""
+
         # Save square variant
-        filename = f"{episode_num}-{title_slug}-{provider.value}-{variant_num}.jpg"
+        filename = f"{episode_num}-{title_slug}{label_part}-{provider.value}-{variant_num}.jpg"
         output_path = output_dir / filename
-        square_path = output_path if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path) else None
+        square_path = output_path if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path, compact_bar) else None
 
         # Reuse same image for social variant (different cropping/processing)
-        filename_social = f"{episode_num}-{title_slug}-social-{provider.value}-{variant_num}.jpg"
+        filename_social = f"{episode_num}-{title_slug}{label_part}-social-{provider.value}-{variant_num}.jpg"
         output_path_social = output_dir / filename_social
-        social_path = output_path_social if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SOCIAL, output_path_social) else None
+        social_path = output_path_social if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SOCIAL, output_path_social, compact_bar) else None
 
         return (variant_num, square_path, social_path)
 
@@ -1765,7 +2036,8 @@ async def generate_all_variants(
     concept: str,
     episode_num: int,
     episode_title: str,
-    output_dir: Path
+    output_dir: Path,
+    concept_label: str = ""
 ) -> Dict[ImageVariant, List[Path]]:
     """Generate 4 different images: 2 with Bolt only, 2 with Bolt + hosts
 
@@ -1781,7 +2053,7 @@ async def generate_all_variants(
 
     # Generate all 4 variants concurrently (with controlled concurrency)
     tasks = [
-        generate_single_variant(session, api_key, provider, concept, episode_num, episode_title, output_dir, variant_num, semaphore)
+        generate_single_variant(session, api_key, provider, concept, episode_num, episode_title, output_dir, variant_num, semaphore, concept_label)
         for variant_num in range(1, 5)
     ]
 
@@ -1801,7 +2073,8 @@ async def generate_with_providers(
     episode_num: int,
     episode_title: str,
     selected_concept: str,
-    providers: List[Provider]
+    providers: List[Provider],
+    concept_label: str = ""
 ) -> Dict[Provider, Dict[ImageVariant, List[Path]]]:
     """Generate 4 images per provider: 2 with Bolt only, 2 with Bolt + hosts
 
@@ -1843,7 +2116,8 @@ async def generate_with_providers(
                 selected_concept,
                 episode_num,
                 episode_title,
-                output_dir
+                output_dir,
+                concept_label
             )
 
             all_results[provider] = results
@@ -1851,20 +2125,38 @@ async def generate_with_providers(
     return all_results
 
 
-def save_concepts(episode_num: int, episode_title: str, concepts: List[Tuple[str, str]], selected_index: int):
-    """Save concepts to JSON file for reference (atomic write)"""
+def save_concepts(episode_num: int, episode_title: str, concepts: List[Tuple[str, str]], selections: List[Tuple[int, str]]):
+    """Save concepts to JSON file for reference (atomic write)
+
+    Args:
+        selections: List of (index, concept_text) tuples for selected concepts
+    """
     # Convert concepts to dict format for JSON
     concepts_list = [{"concept": concept, "provider": provider} for concept, provider in concepts]
-    selected_concept, selected_provider = concepts[selected_index - 1]
+
+    # Build selection data (backwards compatible: first selection also stored in legacy fields)
+    first_index, first_concept = selections[0]
+    first_provider = concepts[first_index - 1][1]
 
     concepts_data = {
         "episode": episode_num,
         "title": episode_title,
         "concepts": concepts_list,
-        "selected_index": selected_index,
-        "selected_concept": selected_concept,
-        "selected_provider": selected_provider
+        "selected_index": first_index,
+        "selected_concept": first_concept,
+        "selected_provider": first_provider,
     }
+
+    # Add multi-select data if more than one concept was selected
+    if len(selections) > 1:
+        concepts_data["all_selections"] = [
+            {
+                "index": idx,
+                "concept": text,
+                "provider": concepts[idx - 1][1]
+            }
+            for idx, text in selections
+        ]
 
     # Save to episode-numbered subdirectory
     episode_dir = OUTPUT_DIR / str(episode_num)
@@ -2029,17 +2321,12 @@ async def main():
 
     # Phase 1: Generate concepts (with regeneration loop)
     if args.skip_concepts:
-        # Create dummy concepts for testing
-        concepts = [
-            (f"Abstract visualization of {args.title} using cloud computing iconography", "Test"),
-            (f"Geometric representation of {args.title} in modern tech aesthetic", "Test"),
-            (f"Metaphorical illustration of {args.title} with cloud elements", "Test"),
-            (f"Digital cloud infrastructure concept for {args.title}", "Test"),
-            (f"Futuristic tech visualization of {args.title}", "Test"),
-            (f"Modern cloud metaphor for {args.title}", "Test")
-        ]
+        # Create dummy concepts for testing (one per lens)
+        concepts = [(f"Test concept {i+1} for {args.title} [{lens['label']}]", "Test")
+                    for i, lens in enumerate(CREATIVE_LENSES)]
         selected_index = args.concept or 1
         selected_concept, _ = concepts[selected_index - 1]
+        selections = [(selected_index, selected_concept)]
         print(f"\n⚠️  Skipping concept generation, using test concept {selected_index}")
     else:
         # Loop for concept generation/regeneration
@@ -2055,20 +2342,21 @@ async def main():
             if args.concept:
                 selected_index = args.concept
                 selected_concept, _ = concepts[selected_index - 1]
+                selections = [(selected_index, selected_concept)]
                 print(f"\n✓ Auto-selected concept {selected_index}: {selected_concept}\n")
                 break
 
-            # Present concepts and get user choice
-            selected_index, selected_concept, should_regenerate = await present_concepts_and_choose(concepts, args.title)
+            # Present concepts and get user choice (supports multi-select)
+            selections, should_regenerate = await present_concepts_and_choose(concepts, args.title)
 
             # If user wants to regenerate, loop again
             if should_regenerate:
                 continue
             else:
-                break  # User selected a concept, exit loop
+                break  # User selected concept(s), exit loop
 
     # Save concepts
-    save_concepts(args.episode, args.title, concepts, selected_index)
+    save_concepts(args.episode, args.title, concepts, selections)
 
     # Phase 2 & 3: Generate and process images
     # Each provider generates 4 variants: 2 with Bolt only, 2 with Bolt + hosts
@@ -2088,15 +2376,33 @@ async def main():
         print("❌ No valid providers available with API keys")
         sys.exit(1)
 
-    results = await generate_with_providers(
-        args.episode,
-        args.title,
-        selected_concept,
-        providers
-    )
+    # Generate images for each selected concept
+    all_results = {}
+    multi = len(selections) > 1
+    for sel_idx, (concept_index, selected_concept) in enumerate(selections):
+        if multi:
+            print(f"\n{'=' * 70}")
+            print(f"📌 Generating images for concept {sel_idx + 1}/{len(selections)} (#{concept_index})")
+            print(f"   {selected_concept[:100]}{'...' if len(selected_concept) > 100 else ''}")
+            print(f"{'=' * 70}")
 
-    # Print summary
-    print_summary(args.episode, args.title, selected_concept, results)
+        # Add concept label to filenames when generating multiple concepts
+        concept_label = f"c{concept_index}" if multi else ""
+
+        results = await generate_with_providers(
+            args.episode,
+            args.title,
+            selected_concept,
+            providers,
+            concept_label
+        )
+        all_results[concept_index] = (selected_concept, results)
+
+    # Print summary for each concept
+    for concept_index, (selected_concept, results) in all_results.items():
+        if len(all_results) > 1:
+            print(f"\n--- Concept #{concept_index} ---")
+        print_summary(args.episode, args.title, selected_concept, results)
 
 
 if __name__ == "__main__":
