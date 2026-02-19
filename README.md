@@ -1,13 +1,13 @@
 # The Cloud Pod - Cover Image Generator
 
-Automated podcast cover image generator using OpenAI and Google Gemini AI APIs.
+Automated podcast cover image generator using OpenAI, Google Gemini, and Anthropic Claude AI APIs.
 
 ## Features
 
-- **6 Creative Concepts**: Each provider (OpenAI and Gemini) generates 3 unique concepts inspired by your episode title (6 total)
+- **9 Creative Concepts**: Concepts rotate across all available providers (OpenAI, Gemini, Anthropic) using 9 creative lenses
 - **Generate More Concepts**: Add additional concepts anytime with optional keyword steering to guide creative direction
 - **Keyword Steering**: Provide keywords (e.g., "space theme", "retro style", "Bolt-focused") to influence concept generation
-- **Dual Provider Support**: Both OpenAI (gpt-image-1) and Google Gemini generate images from your selected concept
+- **Multi-Provider Support**: OpenAI and Google Gemini generate images; Anthropic Claude adds a third voice for concept generation
 - **Automatic Character Variants**: Each provider automatically generates 4 versions:
   - 2 images with Bolt only
   - 2 images with Bolt + all four hosts
@@ -209,6 +209,8 @@ Each image includes:
   - **Gemini**:
     - Concepts: `gemini-3-flash-preview` with thinkingLevel: medium
     - Images: `gemini-3-pro-image-preview` (Nano Banana Pro - 4K native)
+  - **Anthropic**:
+    - Concepts: `claude-sonnet-4-6` (concept generation only, no image generation)
 
 ## Files
 

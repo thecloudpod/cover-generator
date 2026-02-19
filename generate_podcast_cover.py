@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # Load environment variables from .env file
@@ -31,6 +33,7 @@ load_dotenv()
 # API Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # OpenAI Endpoints - Latest Models
 OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
@@ -43,6 +46,10 @@ GEMINI_TEXT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/
 GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent"
 GEMINI_TEXT_MODEL = "gemini-3-flash-preview"  # Latest flash with thinking_level
 GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview"  # Nano Banana Pro - 4K with up to 14 references
+
+# Anthropic Claude - Concept Generation Only (no image generation)
+ANTHROPIC_CHAT_ENDPOINT = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_CHAT_MODEL = "claude-sonnet-4-6"  # Fast, creative concept generation
 
 # Image Dimensions
 SQUARE_SIZE = (3000, 3000)  # Podcast cover format
@@ -94,6 +101,7 @@ FONT_PATHS = [
 # Timeouts
 OPENAI_TIMEOUT = 120
 GEMINI_TIMEOUT = 180
+ANTHROPIC_TIMEOUT = 120
 
 # Rate Limiting
 OPENAI_DELAY = 13  # seconds between requests (5 per minute limit)
@@ -316,6 +324,60 @@ def load_host_references() -> List[Dict[str, str]]:
 
         if loaded_refs:
             print(f"  ✓ Loaded {len(loaded_refs)} reference images in priority order:")
+            for ref in loaded_refs:
+                print(f"    {ref['priority']}. {ref['name']} - {ref['role']}")
+
+        return loaded_refs
+    except (OSError, IOError) as e:
+        logger.warning(f"Could not load reference images: {e}")
+        return []
+
+
+def load_host_references_as_pil() -> List[Dict[str, any]]:
+    """Load all host images as PIL Image objects for google-genai SDK
+
+    Returns list of dicts with 'name', 'image' (PIL Image), 'role', 'priority'
+    Ordered by priority for reference hierarchy (Gemini 3 SDK)
+    """
+    hosts_dir = SCRIPT_DIR / "Hosts"
+
+    # Define reference hierarchy - priority order matters for identity locking
+    reference_order = [
+        {"filename": "bolt.png", "name": "Bolt", "role": "Primary mascot reference (canonical)", "priority": 1},
+        {"filename": "Jonathan Baker.png", "name": "Jonathan", "role": "Host 1 - Face and proportions reference", "priority": 2},
+        {"filename": "Justin Brodley.jpg", "name": "Justin", "role": "Host 2 - Face and proportions reference", "priority": 3},
+        {"filename": "Matthew Kohn.jpeg", "name": "Matthew", "role": "Host 3 - Face and proportions reference", "priority": 4},
+        {"filename": "Ryan Lucas.jpeg", "name": "Ryan", "role": "Host 4 - Face and proportions reference", "priority": 5},
+    ]
+
+    loaded_refs = []
+
+    try:
+        for ref_spec in reference_order:
+            ref_path = hosts_dir / ref_spec["filename"]
+
+            if not ref_path.exists():
+                logger.warning(f"Reference image not found: {ref_spec['filename']}")
+                continue
+
+            # Validate file size
+            file_size = ref_path.stat().st_size
+            if file_size > MAX_IMAGE_SIZE:
+                logger.warning(f"{ref_spec['filename']} too large ({file_size / 1024 / 1024:.1f}MB), skipping")
+                continue
+
+            # Load as PIL Image
+            img = Image.open(ref_path)
+            loaded_refs.append({
+                "name": ref_spec["name"],
+                "image": img,
+                "role": ref_spec["role"],
+                "priority": ref_spec["priority"],
+                "filename": ref_spec["filename"]
+            })
+
+        if loaded_refs:
+            print(f"  ✓ Loaded {len(loaded_refs)} reference images as PIL objects in priority order:")
             for ref in loaded_refs:
                 print(f"    {ref['priority']}. {ref['name']} - {ref['role']}")
 
@@ -952,25 +1014,101 @@ Generate a background image that visualizes this concept while maintaining The C
 # TEXT GENERATION FUNCTIONS (Concept Phase)
 # ============================================================================
 
+def clean_concept_text(text: str) -> Optional[str]:
+    """Clean and validate concept text, stripping thinking artifacts and truncation.
+
+    Returns cleaned text or None if the concept is malformed beyond repair.
+    """
+    if not text or not text.strip():
+        return None
+
+    # Strip leading/trailing whitespace
+    text = text.strip()
+
+    # Remove markdown formatting artifacts (bold, italic markers)
+    text = text.strip('*').strip('_').strip()
+
+    # Detect Gemini thinking leakage: deliberation text with bullet points, questions, alternatives
+    thinking_indicators = [
+        '* ', '*\t', '    *', 'How about', 'What about', 'What if',
+        'Let me think', 'I could', 'Option ', 'Alternatively',
+    ]
+    lines = text.split('\n')
+    # If more than half the lines look like thinking, reject the whole concept
+    thinking_lines = sum(1 for line in lines if any(line.strip().startswith(ind) for ind in thinking_indicators))
+    if len(lines) > 1 and thinking_lines > len(lines) // 2:
+        logger.warning("Rejected concept: appears to contain model thinking/deliberation")
+        return None
+
+    # If the text starts mid-thought (e.g., "different*.\n    *   How about"), reject it
+    if text.startswith(('different', 'instead', 'rather', 'but ', 'however', 'or ')):
+        logger.warning("Rejected concept: starts mid-thought")
+        return None
+
+    # Extract just the first coherent concept if thinking is appended after it
+    # Look for a clean sentence before any deliberation starts
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and any(stripped.startswith(ind) for ind in thinking_indicators):
+            # Everything before this line is the real concept
+            clean_part = '\n'.join(lines[:i]).strip()
+            if clean_part and len(clean_part) > 30:
+                text = clean_part
+                break
+
+    # Check for truncation: concept should end with proper punctuation
+    if text and text[-1] not in '.!?""\u201d)':
+        # Concept appears truncated - try to salvage by trimming to last complete sentence
+        last_period = max(text.rfind('. '), text.rfind('.\n'), text.rfind('."'), text.rfind('.\u201d'))
+        if last_period > len(text) * 0.5:  # Only trim if we keep at least half
+            text = text[:last_period + 1]
+            logger.warning("Trimmed truncated concept to last complete sentence")
+        else:
+            logger.warning("Rejected concept: appears truncated with no recovery point")
+            return None
+
+    # Final length check - a concept should be at least a reasonable sentence
+    if len(text) < 30:
+        logger.warning(f"Rejected concept: too short ({len(text)} chars)")
+        return None
+
+    return text
+
+
 async def _make_api_request(
     session: aiohttp.ClientSession,
     url: str,
     payload: dict,
     headers: dict,
     provider_name: str,
-    extract_response
+    extract_response,
+    timeout: int = None
 ) -> Optional[str]:
-    """Generic API request handler for both OpenAI and Gemini"""
+    """Generic API request handler for OpenAI, Gemini, and Anthropic"""
+    # Use provider-specific timeout, falling back to provider defaults
+    if timeout is None:
+        if provider_name == "OpenAI":
+            timeout = OPENAI_TIMEOUT
+        elif provider_name == "Gemini":
+            timeout = GEMINI_TIMEOUT
+        else:
+            timeout = ANTHROPIC_TIMEOUT
     try:
         async with session.post(
             url,
             json=payload,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=30)
+            timeout=aiohttp.ClientTimeout(total=timeout)
         ) as response:
             if response.status == 200:
                 data = await response.json()
-                return extract_response(data)
+                raw_text = extract_response(data)
+                # Validate and clean the concept text
+                cleaned = clean_concept_text(raw_text)
+                if cleaned is None:
+                    logger.warning(f"{provider_name} returned malformed concept, retrying...")
+                    return None
+                return cleaned
             else:
                 error_text = await response.text()
                 logger.error(f"{provider_name} request failed: {error_text}")
@@ -1011,19 +1149,147 @@ async def generate_concept_gemini(
     keywords: str = None,
     creative_lens: dict = None
 ) -> Optional[str]:
-    """Generate a creative concept using Google Gemini"""
+    """Generate a creative concept using Google Gemini SDK with Flash 3"""
+
+    # Initialize the Gemini client
+    client = genai.Client(api_key=api_key)
+
+    prompt = build_concept_prompt(episode_title, previous_concepts, keywords, creative_lens)
+
+    # Configure generation for creative text generation
+    config = types.GenerateContentConfig(
+        temperature=0.9,
+        max_output_tokens=2048
+    )
+
+    try:
+        # Use Gemini 3 Flash for fast, creative concept generation
+        response = client.models.generate_content(
+            model=GEMINI_TEXT_MODEL,  # "gemini-3-flash-preview"
+            contents=prompt,
+            config=config
+        )
+
+        # Extract text from response
+        if response.candidates and len(response.candidates) > 0:
+            text = response.candidates[0].content.parts[0].text.strip()
+
+            # Validate and clean the concept text
+            cleaned = clean_concept_text(text)
+            if cleaned is None:
+                logger.warning("Gemini returned malformed concept, retrying...")
+                return None
+            return cleaned
+
+        logger.error("No text in Gemini SDK response")
+        return None
+
+    except Exception as e:
+        logger.error(f"Gemini SDK request error: {e}")
+        return None
+
+
+async def generate_concept_anthropic(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    episode_title: str,
+    previous_concepts: List[str] = None,
+    keywords: str = None,
+    creative_lens: dict = None
+) -> Optional[str]:
+    """Generate a creative concept using Anthropic Claude"""
     payload = {
-        "contents": [{"parts": [{"text": build_concept_prompt(episode_title, previous_concepts, keywords, creative_lens)}]}],
-        "generationConfig": {
-            "temperature": 0.9,
-            "maxOutputTokens": 2048
-        }
+        "model": ANTHROPIC_CHAT_MODEL,
+        "max_tokens": 2048,
+        "messages": [{"role": "user", "content": build_concept_prompt(episode_title, previous_concepts, keywords, creative_lens)}]
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json"
     }
 
     return await _make_api_request(
-        session, f"{GEMINI_TEXT_ENDPOINT}?key={api_key}", payload, {}, "Gemini",
-        lambda data: data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        session, ANTHROPIC_CHAT_ENDPOINT, payload, headers, "Anthropic",
+        lambda data: data["content"][0]["text"].strip()
     )
+
+
+async def generate_text_with_provider(prompt: str, provider: str, max_tokens: int = 512, temperature: float = 0.7) -> Optional[str]:
+    """Helper function to generate text with any provider (uses SDK for Gemini)
+
+    Args:
+        prompt: The text prompt to send
+        provider: "OpenAI", "Anthropic", or "Gemini"
+        max_tokens: Maximum output tokens
+        temperature: Sampling temperature
+
+    Returns:
+        Generated text or None on error
+    """
+    try:
+        if provider == "OpenAI" and OPENAI_API_KEY:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    OPENAI_CHAT_ENDPOINT,
+                    headers={
+                        "Authorization": f"Bearer {OPENAI_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": OPENAI_CHAT_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_completion_tokens": max_tokens
+                    },
+                    timeout=aiohttp.ClientTimeout(total=OPENAI_TIMEOUT)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data["choices"][0]["message"]["content"].strip()
+
+        elif provider == "Anthropic" and ANTHROPIC_API_KEY:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    ANTHROPIC_CHAT_ENDPOINT,
+                    headers={
+                        "x-api-key": ANTHROPIC_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": ANTHROPIC_CHAT_MODEL,
+                        "max_tokens": max_tokens,
+                        "messages": [{"role": "user", "content": prompt}]
+                    },
+                    timeout=aiohttp.ClientTimeout(total=ANTHROPIC_TIMEOUT)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data["content"][0]["text"].strip()
+
+        elif provider == "Gemini" and GOOGLE_API_KEY:
+            # Use the official SDK for Gemini
+            client = genai.Client(api_key=GOOGLE_API_KEY)
+            config = types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens
+            )
+
+            response = client.models.generate_content(
+                model=GEMINI_TEXT_MODEL,
+                contents=prompt,
+                config=config
+            )
+
+            if response.candidates and len(response.candidates) > 0:
+                return response.candidates[0].content.parts[0].text.strip()
+
+        logger.error(f"Text generation with {provider} failed or no API key")
+        return None
+
+    except Exception as e:
+        logger.error(f"Text generation error with {provider}: {e}")
+        return None
 
 
 async def generate_concepts(episode_title: str) -> List[Tuple[str, str]]:
@@ -1040,19 +1306,19 @@ async def generate_concepts(episode_title: str) -> List[Tuple[str, str]]:
     previous_concepts = []
 
     async with aiohttp.ClientSession() as session:
-        # Build provider list - one concept per lens, alternating providers
+        # Build provider list - one concept per lens, rotating across available providers
+        available_providers = []
+        if OPENAI_API_KEY:
+            available_providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY))
+        if GOOGLE_API_KEY:
+            available_providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY))
+        if ANTHROPIC_API_KEY:
+            available_providers.append(("Anthropic", generate_concept_anthropic, ANTHROPIC_API_KEY))
+
         providers = []
         for i, lens in enumerate(CREATIVE_LENSES):
-            if OPENAI_API_KEY and GOOGLE_API_KEY:
-                # Alternate between providers
-                if i % 2 == 0:
-                    providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY, lens))
-                else:
-                    providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lens))
-            elif OPENAI_API_KEY:
-                providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY, lens))
-            elif GOOGLE_API_KEY:
-                providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lens))
+            prov_name, prov_func, prov_key = available_providers[i % len(available_providers)]
+            providers.append((prov_name, prov_func, prov_key, lens))
 
         for provider_name, generate_func, api_key, lens in providers:
             print(f"  Generating {provider_name} concept {len(concepts) + 1}/{num_lenses} [{lens['label']}]...")
@@ -1112,20 +1378,20 @@ async def generate_more_concepts(
         lenses_for_more.append(CREATIVE_LENSES[lens_idx])
 
     async with aiohttp.ClientSession() as session:
-        # Alternate between providers for variety
+        # Rotate across available providers for variety
+        available_providers = []
+        if OPENAI_API_KEY:
+            available_providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY))
+        if GOOGLE_API_KEY:
+            available_providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY))
+        if ANTHROPIC_API_KEY:
+            available_providers.append(("Anthropic", generate_concept_anthropic, ANTHROPIC_API_KEY))
+
         providers = []
-        if OPENAI_API_KEY and GOOGLE_API_KEY:
-            # If both available, alternate
-            for i in range(count):
-                lens = lenses_for_more[i]
-                if i % 2 == 0:
-                    providers.append(("OpenAI", generate_concept_openai, OPENAI_API_KEY, lens))
-                else:
-                    providers.append(("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lens))
-        elif OPENAI_API_KEY:
-            providers = [("OpenAI", generate_concept_openai, OPENAI_API_KEY, lenses_for_more[i]) for i in range(count)]
-        elif GOOGLE_API_KEY:
-            providers = [("Gemini", generate_concept_gemini, GOOGLE_API_KEY, lenses_for_more[i]) for i in range(count)]
+        for i in range(count):
+            lens = lenses_for_more[i]
+            prov_name, prov_func, prov_key = available_providers[i % len(available_providers)]
+            providers.append((prov_name, prov_func, prov_key, lens))
 
         for provider_name, generate_func, api_key, lens in providers:
             print(f"  Generating {provider_name} concept {len(new_concepts) + 1}/{count} [{lens['label']}]...")
@@ -1163,45 +1429,7 @@ Provide an updated concept that incorporates the user's refinement while maintai
 
 Return ONLY the refined concept in one sentence:"""
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            if provider == "OpenAI" and OPENAI_API_KEY:
-                async with session.post(
-                    OPENAI_CHAT_ENDPOINT,
-                    headers={
-                        "Authorization": f"Bearer {OPENAI_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": OPENAI_CHAT_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_completion_tokens": CONCEPT_REFINEMENT_TOKENS
-                    },
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data["choices"][0]["message"]["content"].strip()
-            else:  # Gemini
-                if GOOGLE_API_KEY:
-                    url = f"{GEMINI_TEXT_ENDPOINT}?key={GOOGLE_API_KEY}"
-                    async with session.post(
-                        url,
-                        json={
-                            "contents": [{"parts": [{"text": prompt}]}],
-                            "generationConfig": {"temperature": 0.7, "maxOutputTokens": CONCEPT_REFINEMENT_TOKENS}
-                        },
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-        logger.error("Refinement failed")
-        return None
-    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError) as e:
-        logger.error(f"Refinement error: {e}")
-        return None
+    return await generate_text_with_provider(prompt, provider, max_tokens=CONCEPT_REFINEMENT_TOKENS, temperature=0.7)
 
 
 async def polish_custom_concept(custom_concept: str, episode_title: str) -> Optional[str]:
@@ -1225,48 +1453,15 @@ IMPORTANT: Keep the user's core idea intact. Only enhance and clarify, don't cha
 
 Return ONLY the polished concept:"""
 
-    try:
-        # Use OpenAI if available, otherwise Gemini
-        provider = "OpenAI" if OPENAI_API_KEY else "Gemini"
+    # Use first available provider: OpenAI > Anthropic > Gemini
+    if OPENAI_API_KEY:
+        provider = "OpenAI"
+    elif ANTHROPIC_API_KEY:
+        provider = "Anthropic"
+    else:
+        provider = "Gemini"
 
-        async with aiohttp.ClientSession() as session:
-            if provider == "OpenAI" and OPENAI_API_KEY:
-                async with session.post(
-                    OPENAI_CHAT_ENDPOINT,
-                    headers={
-                        "Authorization": f"Bearer {OPENAI_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": OPENAI_CHAT_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_completion_tokens": CONCEPT_REFINEMENT_TOKENS
-                    },
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data["choices"][0]["message"]["content"].strip()
-            else:  # Gemini
-                if GOOGLE_API_KEY:
-                    url = f"{GEMINI_TEXT_ENDPOINT}?key={GOOGLE_API_KEY}"
-                    async with session.post(
-                        url,
-                        json={
-                            "contents": [{"parts": [{"text": prompt}]}],
-                            "generationConfig": {"temperature": 0.7, "maxOutputTokens": CONCEPT_REFINEMENT_TOKENS}
-                        },
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-        logger.error("Custom concept polishing failed")
-        return None
-    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError) as e:
-        logger.error(f"Custom concept polishing error: {e}")
-        return None
+    return await generate_text_with_provider(prompt, provider, max_tokens=CONCEPT_REFINEMENT_TOKENS, temperature=0.7)
 
 
 async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_title: str) -> Tuple[List[Tuple[int, str]], bool]:
@@ -1589,19 +1784,26 @@ async def generate_image_gemini(
     include_bolt: bool = False,
     include_hosts: bool = False
 ) -> Optional[bytes]:
-    """Generate image using Google Gemini with optional reference images"""
+    """Generate image using Google Gemini SDK with optional reference images
 
-    print(f"  🎨 Gemini 3 Pro Image (Nano Banana) generating {variant.value} variant...")
+    Uses the official google-genai SDK for cleaner code and access to Thinking Process.
+    """
 
-    # Load and filter reference images
-    parts = []
-    references = load_host_references()
-    filtered_refs = _filter_references(references, include_bolt, include_hosts)
+    print(f"  🎨 Gemini 3 Pro Image (Nano Banana Pro) generating {variant.value} variant...")
+
+    # Initialize the Gemini client
+    client = genai.Client(api_key=api_key)
+
+    # Load and filter reference images as PIL objects
+    references = load_host_references_as_pil()
+    filtered_refs = [ref for ref in references
+                     if (ref["name"] == "Bolt" and include_bolt) or (ref["name"] != "Bolt" and include_hosts)]
 
     print(f"  📋 Loaded {len(references)} total references, filtered to {len(filtered_refs)} (Bolt={include_bolt}, Hosts={include_hosts})")
 
-    # Build prompt following Google's official SDK example:
-    # Prompt FIRST, then reference images (no captions between)
+    # Build contents list: prompt first, then reference images
+    contents = []
+
     if filtered_refs:
         # Build concise prompt with character descriptions
         character_intro = ""
@@ -1610,67 +1812,56 @@ async def generate_image_gemini(
         if include_hosts:
             character_intro += "The four podcast hosts (Jonathan, Justin, Matthew, Ryan) shown in the reference photos. Render them in the same cartoon style as Bolt - simple flat vector illustration with distinctive hair patterns: Jonathan has dark wavy hair and is clean-shaven, Justin is completely bald with gray goatee, Matthew has horseshoe hair pattern (bald on top, hair on sides) with full brown beard, Ryan has wavy golden-brown hair with brown goatee. Use their signature outfit colors: blue, gray, orange, teal."
 
-        # Prompt comes FIRST (matching official SDK example)
         final_prompt = f"""An illustration featuring {character_intro}
 
 GENERATION TASK:
 {prompt}"""
-        parts.append({"text": final_prompt})
 
-        # Then add ALL reference images in sequence (no captions between)
+        # Add prompt, then all reference PIL Images
+        contents.append(final_prompt)
         for ref in filtered_refs:
-            mime_type = "image/jpeg" if ref["filename"].endswith(('.jpg', '.jpeg')) else "image/png"
-            parts.append({"inline_data": {"mime_type": mime_type, "data": ref["data"]}})
-
+            contents.append(ref["image"])
     else:
-        parts.append({"text": prompt})
+        contents.append(prompt)
 
-    # Gemini image generation - matching official SDK config structure
-    # Set aspect ratio and resolution based on variant
+    # Configure generation with SDK types
     aspect_ratio = "1:1" if variant == ImageVariant.SQUARE else "16:9"
     image_size = "4K"  # Maximum quality (options: "1K", "2K", "4K")
 
-    payload = {
-        "contents": [{"parts": parts}],
-        "generationConfig": {
-            "responseModalities": ["IMAGE", "TEXT"],
-            "imageConfig": {
-                "aspectRatio": aspect_ratio,
-                "imageSize": image_size
-            }
-        }
-    }
-
-    url = f"{GEMINI_IMAGE_ENDPOINT}?key={api_key}"
+    config = types.GenerateContentConfig(
+        response_modalities=["IMAGE", "TEXT"],
+        thinking_config=types.ThinkingConfig(include_thoughts=True),  # Enable reasoning insights
+        image_config=types.ImageConfig(
+            aspect_ratio=aspect_ratio,
+            image_size=image_size
+        )
+    )
 
     try:
-        async with session.post(
-            url,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=GEMINI_TIMEOUT)
-        ) as response:
-            if response.status == 200:
-                data = await response.json()
+        # Call the model using SDK
+        response = client.models.generate_content(
+            model="gemini-3-pro-image-preview",
+            contents=contents,
+            config=config
+        )
 
-                # Extract image from Gemini response (try both camelCase and snake_case)
-                if "candidates" in data and len(data["candidates"]) > 0:
-                    candidate = data["candidates"][0]
-                    if "content" in candidate and "parts" in candidate["content"]:
-                        for part in candidate["content"]["parts"]:
-                            # Try both naming conventions
-                            inline_data = part.get("inlineData") or part.get("inline_data")
-                            if inline_data and inline_data.get("data"):
-                                print(f"  ✓ Gemini {variant.value} generated")
-                                return base64.b64decode(inline_data["data"])
+        # Extract image and optional thinking process
+        for part in response.candidates[0].content.parts:
+            # Check for thinking process (Gemini 3's reasoning)
+            if hasattr(part, 'thought') and part.thought:
+                print(f"  🧠 Model Thinking: {part.text[:100]}...")  # Show first 100 chars
 
-                logger.error("No image data in Gemini response")
-                return None
-            else:
-                error_text = await response.text()
-                logger.error(f"Gemini generation failed: {error_text}")
-                return None
-    except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, ValueError) as e:
-        logger.error(f"Gemini generation error: {e}")
+            # Extract the image
+            if hasattr(part, 'inline_data') and part.inline_data:
+                image_bytes = part.inline_data.data
+                print(f"  ✓ Gemini {variant.value} generated with SDK")
+                return image_bytes
+
+        logger.error("No image data in Gemini SDK response")
+        return None
+
+    except Exception as e:
+        logger.error(f"Gemini SDK generation error: {e}")
         return None
 
 
@@ -2301,10 +2492,12 @@ async def main():
         print(f"❌ Error: Title must be 1-{MAX_TITLE_LENGTH} characters and not empty")
         sys.exit(1)
 
-    # Validate API keys
+    # Validate API keys - need at least one image provider (OpenAI or Gemini)
+    # Anthropic is concept-only, so it alone isn't sufficient
     if not OPENAI_API_KEY and not GOOGLE_API_KEY:
-        print("❌ Error: No API keys found!")
+        print("❌ Error: No image provider API keys found!")
         print("Please set OPENAI_API_KEY and/or GOOGLE_API_KEY in .env file")
+        print("(ANTHROPIC_API_KEY is optional, for concept generation only)")
         sys.exit(1)
 
     # Validate logo file
@@ -2317,7 +2510,15 @@ async def main():
     print("=" * 70)
     print(f"\nEpisode: {args.episode}")
     print(f"Title: {args.title}")
-    print(f"Provider: {args.provider}")
+    print(f"Image Provider: {args.provider}")
+    concept_providers = []
+    if OPENAI_API_KEY:
+        concept_providers.append("OpenAI")
+    if GOOGLE_API_KEY:
+        concept_providers.append("Gemini")
+    if ANTHROPIC_API_KEY:
+        concept_providers.append("Anthropic")
+    print(f"Concept Providers: {', '.join(concept_providers)}")
 
     # Phase 1: Generate concepts (with regeneration loop)
     if args.skip_concepts:
