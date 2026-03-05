@@ -200,7 +200,7 @@ Each image includes:
   - **Smart Duplication**: When concepts need crowds/org charts, hosts can be duplicated with variations (glasses, accessories, different outfits) while maintaining recognizable core features
 - **Reference Image Support**:
   - **OpenAI**: Uses `images.edit()` endpoint with `input_fidelity: high` for up to 5 references
-  - **Gemini**: Gemini 3 Pro Image (Nano Banana) supports up to 14 references via inline_data (we use 5)
+  - **Gemini**: Gemini 3 Pro Image (Nano Banana Pro) supports up to 14 references via inline_data (we use 5)
 - **Smart Aspect Ratio Handling**: Social images use blurred letterbox backgrounds to avoid distortion when converting square to landscape
 - **AI Models**:
   - **OpenAI**:
@@ -209,6 +209,7 @@ Each image includes:
   - **Gemini**:
     - Concepts: `gemini-3-flash-preview` with thinkingLevel: medium
     - Images: `gemini-3-pro-image-preview` (Nano Banana Pro - 4K native)
+    - Note: Using Pro over Flash (Nano Banana 2) for superior composition and character design. Will update to next "Pro" model when available.
   - **Anthropic**:
     - Concepts: `claude-sonnet-4-6` (concept generation only, no image generation)
 

@@ -11,8 +11,9 @@ import argparse
 import base64
 import json
 import os
-import requests
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from io import BytesIO
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import Optional, Dict, List, Tuple
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from openai import AsyncOpenAI
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # Load environment variables from .env file
@@ -35,17 +37,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-# OpenAI Endpoints - Latest Models
-OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
-OPENAI_IMAGE_ENDPOINT = "https://api.openai.com/v1/images/generations"
-OPENAI_CHAT_MODEL = "gpt-5.2"  # Latest reasoning model with thinking
-OPENAI_IMAGE_MODEL = "gpt-image-1.5"  # Latest DALL-E with 5-reference support
+# OpenAI Models - Latest
+OPENAI_CHAT_MODEL = "gpt-5.2"  # Latest reasoning model
+OPENAI_IMAGE_MODEL = "gpt-image-1.5"  # GPT Image model with up to 16-reference support
 
-# Gemini Endpoints - Gemini 3 Models
-GEMINI_TEXT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent"
-GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent"
+# Gemini Models - Gemini 3
 GEMINI_TEXT_MODEL = "gemini-3-flash-preview"  # Latest flash with thinking_level
 GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview"  # Nano Banana Pro - 4K with up to 14 references
+# NOTE: Using Pro over Flash (Nano Banana 2) - Pro provides superior composition, character design,
+# and thinking capability for complex multi-character scenes. Update to next "Pro" model when available.
 
 # Anthropic Claude - Concept Generation Only (no image generation)
 ANTHROPIC_CHAT_ENDPOINT = "https://api.anthropic.com/v1/messages"
@@ -67,8 +67,8 @@ SOCIAL_LOGO_SIZE = (160, 160)
 # Protected area for title/logo (overlay bar at bottom)
 SQUARE_BAR_HEIGHT = 650   # Height of overlay bar for square images
 SOCIAL_BAR_HEIGHT = 160   # Height of overlay bar for social images
-SQUARE_BAR_HEIGHT_COMPACT = 420   # Smaller overlay for comic strip layouts
-SOCIAL_BAR_HEIGHT_COMPACT = 110   # Smaller overlay for comic strip layouts
+SQUARE_BAR_HEIGHT_COMPACT = 350   # Smaller overlay for comic strip layouts (~12% of 3000px)
+SOCIAL_BAR_HEIGHT_COMPACT = 95    # Smaller overlay for comic strip layouts (~15% of 630px)
 TITLE_BAR_ALPHA = 160     # Semi-transparent black bar (0=transparent, 255=opaque) - lighter for visibility
 TITLE_BAR_PADDING = 50    # Padding inside the bar
 
@@ -124,9 +124,38 @@ LETTERBOX_BLUR_RADIUS = 50
 LETTERBOX_BRIGHTNESS = 0.5
 LETTERBOX_SATURATION = 0.7
 
+# JPEG Compression (web-optimized)
+# Square (3000x3000): quality=85, ~400-700KB (down from 1.3-2.2MB at quality=95)
+# Social (1200x630): quality=80, ~100-200KB
+# Both use progressive encoding for better web loading
+
 # Retry Configuration
 MAX_API_RETRIES = 3
 INITIAL_RETRY_DELAY = 1  # seconds
+
+# Concurrency
+PROCESS_POOL = ThreadPoolExecutor(max_workers=4)
+
+
+class AsyncRateLimiter:
+    """Ensures a minimum interval between calls (async-safe)"""
+
+    def __init__(self, min_interval_seconds: float):
+        self.min_interval = min_interval_seconds
+        self._lock = asyncio.Lock()
+        self._last = 0.0
+
+    async def wait(self):
+        async with self._lock:
+            now = time.monotonic()
+            sleep_for = self.min_interval - (now - self._last)
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
+            self._last = time.monotonic()
+
+
+# Rate limiters per provider
+openai_image_limiter = AsyncRateLimiter(OPENAI_DELAY)
 
 
 # ============================================================================
@@ -168,7 +197,7 @@ async def retry_with_backoff(func, *args, **kwargs):
                 return result
             # If result is None, retry
             logger.warning(f"Attempt {attempt + 1}/{MAX_API_RETRIES} returned None, retrying...")
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        except Exception as e:
             if attempt < MAX_API_RETRIES - 1:
                 delay = INITIAL_RETRY_DELAY * (2 ** attempt)
                 logger.warning(f"Attempt {attempt + 1}/{MAX_API_RETRIES} failed: {e}. Retrying in {delay}s...")
@@ -280,10 +309,10 @@ def load_bolt_reference() -> Optional[str]:
 
 
 def load_host_references() -> List[Dict[str, str]]:
-    """Load all host images with metadata for 5-reference strategy
+    """Load all host images with metadata for multi-reference identity lock
 
     Returns list of dicts with 'name', 'data' (base64), 'role', 'priority'
-    Ordered by priority for reference hierarchy (Gemini 3 / OpenAI multi-reference)
+    Ordered by priority for reference hierarchy (GPT Image supports up to 16 references)
     """
     hosts_dir = SCRIPT_DIR / "Hosts"
 
@@ -956,7 +985,7 @@ Bolt MUST appear in this image, integrated naturally into the concept."""
         dimension_guidance = f"""{format_type}
 
 COMIC STRIP LAYOUT:
-This concept is a 4-panel comic strip. Render it as a 2x2 grid that fits ENTIRELY in the UPPER 85% of the image.
+This concept is a 4-panel comic strip. Render it as a 2x2 grid that fits ENTIRELY in the UPPER 88% of the image.
 
 PANEL ARRANGEMENT:
 - TOP ROW: Panel 1 (top-left) and Panel 2 (top-right) - setup panels
@@ -965,10 +994,10 @@ PANEL ARRANGEMENT:
 
 PANEL PROPORTIONS: Each panel is a WIDE HORIZONTAL RECTANGLE (roughly 2:1 width-to-height), like widescreen movie frames or newspaper comic strip panels. NOT square panels.
 
-DEAD ZONE: The bottom ~15% of the image will be covered by a small title overlay.
-- Leave the bottom ~15% as simple solid background color, panel border color, or empty space
+DEAD ZONE: The bottom ~12% of the image will be covered by a compact title overlay.
+- Leave the bottom ~12% as simple solid background color, panel border color, or empty space
 - ALL four panels including panels 3 and 4 must be FULLY VISIBLE above this dead zone
-- No faces, speech bubbles, or important details in the bottom 15%
+- No faces, speech bubbles, or important details in the bottom 12%
 
 TEXT IN IMAGE: ONLY render text that appears in the panel descriptions (speech bubbles, captions, on-screen labels). Do NOT render any character descriptions, instructions, or prompt text as visible text in the image."""
     else:
@@ -1126,7 +1155,7 @@ async def generate_concept_openai(
     keywords: str = None,
     creative_lens: dict = None
 ) -> Optional[str]:
-    """Generate a creative concept using OpenAI GPT-4"""
+    """Generate a creative concept using OpenAI chat completions"""
     payload = {
         "model": OPENAI_CHAT_MODEL,
         "messages": [{"role": "user", "content": build_concept_prompt(episode_title, previous_concepts, keywords, creative_lens)}],
@@ -1135,10 +1164,28 @@ async def generate_concept_openai(
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    return await _make_api_request(
-        session, OPENAI_CHAT_ENDPOINT, payload, headers, "OpenAI",
-        lambda data: data["choices"][0]["message"]["content"].strip()
-    )
+    try:
+        async with session.post(
+            "https://api.openai.com/v1/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=OPENAI_TIMEOUT)
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                raw_text = data["choices"][0]["message"]["content"].strip()
+                cleaned = clean_concept_text(raw_text)
+                if cleaned is None:
+                    logger.warning("OpenAI returned malformed concept, retrying...")
+                    return None
+                return cleaned
+            else:
+                error_text = await response.text()
+                logger.error(f"OpenAI concept request failed: {error_text}")
+                return None
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        logger.error(f"OpenAI concept request error: {e}")
+        return None
 
 
 async def generate_concept_gemini(
@@ -1231,7 +1278,7 @@ async def generate_text_with_provider(prompt: str, provider: str, max_tokens: in
         if provider == "OpenAI" and OPENAI_API_KEY:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    OPENAI_CHAT_ENDPOINT,
+                    "https://api.openai.com/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {OPENAI_API_KEY}",
                         "Content-Type": "application/json"
@@ -1449,7 +1496,9 @@ IMPROVEMENTS TO MAKE:
 - If the concept mentions "Bolt" or characters, maintain that focus
 - Keep the description to 1-2 sentences maximum
 
-IMPORTANT: Keep the user's core idea intact. Only enhance and clarify, don't change the fundamental concept.
+IMPORTANT PRESERVATION RULES:
+- Keep the user's core idea intact. Only enhance and clarify, don't change the fundamental concept.
+- If the user uses "Panel 1:", "Panel 2:", "Panel 3:", "Panel 4:" format for a comic strip, PRESERVE that exact format. Do NOT change it to (1), (2), (3), (4) or any other numbering style.
 
 Return ONLY the polished concept:"""
 
@@ -1528,23 +1577,39 @@ async def present_concepts_and_choose(concepts: List[Tuple[str, str]], episode_t
                                 print("\nEdit the polished concept:")
                                 edited_concept = input(f"{polished}\n> ").strip()
                                 if edited_concept:
+                                    # Ask if it's a comic strip
+                                    is_comic = input("\nIs this a comic strip / multi-panel layout? (y/n): ").strip().lower()
+                                    if is_comic == 'y' and "panel" not in edited_concept.lower():
+                                        edited_concept = f"Panel 1: {edited_concept}"
                                     concepts.append((edited_concept, "Custom"))
                                     return [(len(concepts), edited_concept)], False
                                 else:
+                                    is_comic = input("\nIs this a comic strip / multi-panel layout? (y/n): ").strip().lower()
+                                    if is_comic == 'y' and "panel" not in polished.lower():
+                                        polished = f"Panel 1: {polished}"
                                     concepts.append((polished, "Custom"))
                                     return [(len(concepts), polished)], False
                             elif confirm != 'n':
+                                is_comic = input("\nIs this a comic strip / multi-panel layout? (y/n): ").strip().lower()
+                                if is_comic == 'y' and "panel" not in polished.lower():
+                                    polished = f"Panel 1: {polished}"
                                 concepts.append((polished, "Custom"))
                                 return [(len(concepts), polished)], False
                             else:
                                 use_original = input("\nUse your original concept instead? (Y/n): ").strip().lower()
                                 if use_original != 'n':
+                                    is_comic = input("\nIs this a comic strip / multi-panel layout? (y/n): ").strip().lower()
+                                    if is_comic == 'y' and "panel" not in custom_concept.lower():
+                                        custom_concept = f"Panel 1: {custom_concept}"
                                     concepts.append((custom_concept, "Custom"))
                                     return [(len(concepts), custom_concept)], False
                         else:
                             print("\n⚠️  Polishing failed, but you can still use your original concept.")
                             confirm = input("Use your original concept? (Y/n): ").strip().lower()
                             if confirm != 'n':
+                                is_comic = input("\nIs this a comic strip / multi-panel layout? (y/n): ").strip().lower()
+                                if is_comic == 'y' and "panel" not in custom_concept.lower():
+                                    custom_concept = f"Panel 1: {custom_concept}"
                                 concepts.append((custom_concept, "Custom"))
                                 return [(len(concepts), custom_concept)], False
                     else:
@@ -1644,21 +1709,6 @@ def _filter_references(references: List[Dict[str, str]], include_bolt: bool, inc
             if (ref["name"] == "Bolt" and include_bolt) or (ref["name"] != "Bolt" and include_hosts)]
 
 
-async def _extract_openai_image(session: aiohttp.ClientSession, data: dict, variant: ImageVariant) -> Optional[bytes]:
-    """Extract image bytes from OpenAI API response"""
-    if "data" in data and len(data["data"]) > 0:
-        image_data = data["data"][0]
-        if "b64_json" in image_data:
-            print(f"  ✓ OpenAI {variant.value} generated")
-            return base64.b64decode(image_data["b64_json"])
-        elif "url" in image_data:
-            async with session.get(image_data["url"]) as img_response:
-                if img_response.status == 200:
-                    print(f"  ✓ OpenAI {variant.value} generated")
-                    return await img_response.read()
-    return None
-
-
 async def generate_image_openai(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -1668,129 +1718,88 @@ async def generate_image_openai(
     include_bolt: bool = False,
     include_hosts: bool = False
 ) -> Optional[bytes]:
-    """Generate image using OpenAI GPT Image 1.5 with 5-reference strategy"""
+    """Generate image using OpenAI GPT Image 1.5 via official SDK
+
+    Uses images.edit with up to 16 reference images for identity lock,
+    or images.generate when no references are needed.
+    """
 
     print(f"  🎨 OpenAI GPT-Image-1.5 generating {variant.value} variant...")
 
-    # Use edit endpoint if we have ANY reference images (Bolt and/or hosts)
+    # Rate limit to stay within OpenAI's per-minute quota
+    await openai_image_limiter.wait()
+
+    client = AsyncOpenAI(api_key=api_key)
     use_edit_endpoint = include_bolt or include_hosts
 
-    if use_edit_endpoint:
-        # Use images.edit endpoint with 5-reference strategy
-        # gpt-image-1.5 supports up to 5 reference images
-        import aiohttp
+    try:
+        if use_edit_endpoint:
+            # Load and filter references
+            references = load_host_references()
+            filtered_refs = _filter_references(references, include_bolt, include_hosts)
 
-        form = aiohttp.FormData()
-        form.add_field('model', OPENAI_IMAGE_MODEL)
-        form.add_field('size', '1024x1024')
-        form.add_field('quality', 'high')
-        form.add_field('input_fidelity', 'high')  # Preserve details from input images
-        form.add_field('output_format', 'png')
-        form.add_field('n', '1')
+            print(f"  📋 Loaded {len(references)} total references, filtered to {len(filtered_refs)} (Bolt={include_bolt}, Hosts={include_hosts})")
 
-        # Load and filter references
-        references = load_host_references()
-        filtered_refs = _filter_references(references, include_bolt, include_hosts)
-
-        print(f"  📋 Loaded {len(references)} total references, filtered to {len(filtered_refs)} (Bolt={include_bolt}, Hosts={include_hosts})")
-
-        if filtered_refs:
-            for ref in filtered_refs:
-                ref_bytes = base64.b64decode(ref["data"])
-                content_type = "image/png" if ref["filename"].endswith('.png') else "image/jpeg"
-                form.add_field('image[]', ref_bytes, filename=ref["filename"], content_type=content_type)
-
-            print(f"  📸 Using {len(filtered_refs)} reference images with identity lock")
-
-        # Build identity lock instructions and add to prompt
-        reference_instructions = build_reference_hierarchy_instructions(references, include_bolt, include_hosts)
-        enhanced_prompt = f"""{reference_instructions}
+            # Build identity lock instructions and add to prompt
+            reference_instructions = build_reference_hierarchy_instructions(references, include_bolt, include_hosts)
+            enhanced_prompt = f"""{reference_instructions}
 
 GENERATION TASK:
 {prompt}"""
 
-        form.add_field('prompt', enhanced_prompt)
+            # Open reference images as file objects for the SDK
+            hosts_dir = SCRIPT_DIR / "Hosts"
+            image_files = []
+            for ref in filtered_refs:
+                ref_path = hosts_dir / ref["filename"]
+                image_files.append(open(ref_path, "rb"))
 
-        endpoint = "https://api.openai.com/v1/images/edits"
-        headers = {"Authorization": f"Bearer {api_key}"}
+            print(f"  📸 Using {len(image_files)} reference images with identity lock")
 
-        try:
-            async with session.post(
-                endpoint,
-                data=form,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=OPENAI_TIMEOUT)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    result = await _extract_openai_image(session, data, variant)
-                    if result:
-                        return result
-                    logger.error("No image data in OpenAI response")
-                    return None
-                else:
-                    error_text = await response.text()
-                    logger.error(f"OpenAI edit failed: {error_text}")
-                    return None
-        except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, ValueError) as e:
-            logger.error(f"OpenAI edit error: {e}")
-            return None
+            try:
+                result = await client.images.edit(
+                    model=OPENAI_IMAGE_MODEL,
+                    image=image_files,  # supports up to 16 images
+                    prompt=enhanced_prompt,
+                    size="1024x1024",
+                    quality="high",
+                    input_fidelity="high",
+                )
+            finally:
+                for f in image_files:
+                    f.close()
 
-    else:
-        # Use generate endpoint (no Bolt reference image)
-        if include_hosts:
-            print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
+            img_bytes = base64.b64decode(result.data[0].b64_json)
+            print(f"  ✓ OpenAI {variant.value} generated")
+            return img_bytes
 
-        payload = {
-            "model": OPENAI_IMAGE_MODEL,
-            "prompt": prompt,
-            "n": 1,
-            "size": "1024x1024",
-            "quality": "high",
-            "output_format": "png"
-        }
+        else:
+            # Use generate endpoint (no reference images)
+            if include_hosts:
+                print("  📝 Using text descriptions for 4 hosts (Jonathan, Justin, Matthew, Ryan)")
 
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            result = await client.images.generate(
+                model=OPENAI_IMAGE_MODEL,
+                prompt=prompt,
+                size="1024x1024",
+                quality="high",
+            )
 
-        try:
-            async with session.post(
-                OPENAI_IMAGE_ENDPOINT,
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=OPENAI_TIMEOUT)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    result = await _extract_openai_image(session, data, variant)
-                    if result:
-                        return result
-                    logger.error("No image data in OpenAI response")
-                    return None
-                else:
-                    error_text = await response.text()
-                    logger.error(f"OpenAI generation failed: {error_text}")
-                    return None
-        except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, ValueError) as e:
-            logger.error(f"OpenAI generation error: {e}")
-            return None
+            img_bytes = base64.b64decode(result.data[0].b64_json)
+            print(f"  ✓ OpenAI {variant.value} generated")
+            return img_bytes
+
+    except Exception as e:
+        logger.error(f"OpenAI image generation error: {e}")
+        return None
 
 
-async def generate_image_gemini(
-    session: aiohttp.ClientSession,
-    api_key: str,
-    prompt: str,
-    variant: ImageVariant,
-    concept: str = "",
-    include_bolt: bool = False,
-    include_hosts: bool = False
-) -> Optional[bytes]:
-    """Generate image using Google Gemini SDK with optional reference images
+def _generate_gemini_sync(api_key: str, prompt: str, variant: ImageVariant,
+                          include_bolt: bool, include_hosts: bool) -> Optional[bytes]:
+    """Synchronous Gemini image generation - runs in thread pool
 
-    Uses the official google-genai SDK for cleaner code and access to Thinking Process.
+    All PIL operations and SDK calls happen here to avoid thread-safety issues.
     """
-
-    print(f"  🎨 Gemini 3 Pro Image (Nano Banana Pro) generating {variant.value} variant...")
-
     # Initialize the Gemini client
     client = genai.Client(api_key=api_key)
 
@@ -1829,36 +1838,58 @@ GENERATION TASK:
     image_size = "4K"  # Maximum quality (options: "1K", "2K", "4K")
 
     config = types.GenerateContentConfig(
-        response_modalities=["IMAGE", "TEXT"],
-        thinking_config=types.ThinkingConfig(include_thoughts=True),  # Enable reasoning insights
+        response_modalities=["IMAGE"],
         image_config=types.ImageConfig(
             aspect_ratio=aspect_ratio,
             image_size=image_size
         )
     )
 
+    # Call the model using SDK (blocking call)
+    response = client.models.generate_content(
+        model="gemini-3-pro-image-preview",
+        contents=contents,
+        config=config,
+    )
+
+    # Extract image from response
+    for part in response.candidates[0].content.parts:
+        if hasattr(part, 'inline_data') and part.inline_data:
+            return part.inline_data.data
+
+    return None
+
+
+async def generate_image_gemini(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    prompt: str,
+    variant: ImageVariant,
+    concept: str = "",
+    include_bolt: bool = False,
+    include_hosts: bool = False
+) -> Optional[bytes]:
+    """Generate image using Google Gemini SDK with optional reference images
+
+    Uses the official google-genai SDK. The blocking SDK call runs in a thread pool
+    so multiple variants can execute in parallel.
+    """
+
+    print(f"  🎨 Gemini 3 Pro Image (Nano Banana Pro) generating {variant.value} variant...")
+
     try:
-        # Call the model using SDK
-        response = client.models.generate_content(
-            model="gemini-3-pro-image-preview",
-            contents=contents,
-            config=config
+        # Run entire synchronous workflow in thread (PIL + SDK calls)
+        image_bytes = await asyncio.to_thread(
+            _generate_gemini_sync,
+            api_key, prompt, variant, include_bolt, include_hosts
         )
 
-        # Extract image and optional thinking process
-        for part in response.candidates[0].content.parts:
-            # Check for thinking process (Gemini 3's reasoning)
-            if hasattr(part, 'thought') and part.thought:
-                print(f"  🧠 Model Thinking: {part.text[:100]}...")  # Show first 100 chars
-
-            # Extract the image
-            if hasattr(part, 'inline_data') and part.inline_data:
-                image_bytes = part.inline_data.data
-                print(f"  ✓ Gemini {variant.value} generated with SDK")
-                return image_bytes
-
-        logger.error("No image data in Gemini SDK response")
-        return None
+        if image_bytes:
+            print(f"  ✓ Gemini {variant.value} generated with SDK")
+            return image_bytes
+        else:
+            logger.error("No image data in Gemini SDK response")
+            return None
 
     except Exception as e:
         logger.error(f"Gemini SDK generation error: {e}")
@@ -2148,8 +2179,17 @@ def process_and_save(
             rgb_img.paste(img, mask=img.split()[3])
             img = rgb_img
 
-        # Atomic write
-        atomic_write(output_path, lambda path: img.save(path, 'JPEG', quality=95, optimize=True))
+        # Atomic write with web-optimized JPEG settings
+        # Square: quality=85 (high-res podcast platforms)
+        # Social: quality=80 (smaller social media)
+        # progressive=True for better web loading
+        jpeg_quality = 85 if variant == ImageVariant.SQUARE else 80
+        atomic_write(output_path, lambda path: img.save(
+            path, 'JPEG',
+            quality=jpeg_quality,
+            optimize=True,
+            progressive=True
+        ))
         print(f"  ✓ Saved: {output_path}")
         return True
 
@@ -2161,6 +2201,16 @@ def process_and_save(
 # ============================================================================
 # ORCHESTRATION AND WORKFLOW
 # ============================================================================
+
+async def process_and_save_async(image_bytes: bytes, episode_num: int, episode_title: str,
+                                 variant: ImageVariant, output_path: Path, compact_bar: bool = False) -> bool:
+    """Thread-pooled PIL post-processing (CPU-bound work off the event loop)"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        PROCESS_POOL, process_and_save,
+        image_bytes, episode_num, episode_title, variant, output_path, compact_bar
+    )
+
 
 async def generate_single_variant(
     session: aiohttp.ClientSession,
@@ -2182,7 +2232,10 @@ async def generate_single_variant(
     Returns tuple of (variant_num, square_path, social_path)
     """
 
-    async with semaphore if semaphore else asyncio.Lock():
+    if semaphore:
+        await semaphore.acquire()
+
+    try:
         include_bolt = True  # Always include Bolt
         include_hosts = variant_num >= 3  # Hosts only in variants 3 and 4
         character_label = "bolt+hosts" if include_hosts else "bolt-only"
@@ -2202,22 +2255,43 @@ async def generate_single_variant(
             return (variant_num, None, None)
 
         # Detect comic strip concepts for compact overlay bar
-        compact_bar = concept.strip().lower().startswith("panel 1")
+        # Check for various comic/multi-panel formats
+        concept_lower = concept.strip().lower()
+        is_comic_strip = (
+            concept_lower.startswith("panel 1") or
+            "panel 1:" in concept_lower or
+            "panel 2:" in concept_lower or
+            "panel 1 " in concept_lower or
+            "(1)" in concept_lower and "(2)" in concept_lower or  # (1), (2), (3) format
+            "four-panel" in concept_lower or
+            "4-panel" in concept_lower or
+            "comic strip" in concept_lower
+        )
+        compact_bar = is_comic_strip
 
         # Build filename with optional concept label for multi-select runs
         label_part = f"-{concept_label}" if concept_label else ""
 
-        # Save square variant
+        # Post-process square and social variants concurrently in thread pool
         filename = f"{episode_num}-{title_slug}{label_part}-{provider.value}-{variant_num}.jpg"
         output_path = output_dir / filename
-        square_path = output_path if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path, compact_bar) else None
 
-        # Reuse same image for social variant (different cropping/processing)
         filename_social = f"{episode_num}-{title_slug}{label_part}-social-{provider.value}-{variant_num}.jpg"
         output_path_social = output_dir / filename_social
-        social_path = output_path_social if process_and_save(base_image_bytes, episode_num, episode_title, ImageVariant.SOCIAL, output_path_social, compact_bar) else None
+
+        square_ok, social_ok = await asyncio.gather(
+            process_and_save_async(base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path, compact_bar),
+            process_and_save_async(base_image_bytes, episode_num, episode_title, ImageVariant.SOCIAL, output_path_social, compact_bar),
+        )
+
+        square_path = output_path if square_ok else None
+        social_path = output_path_social if social_ok else None
 
         return (variant_num, square_path, social_path)
+
+    finally:
+        if semaphore:
+            semaphore.release()
 
 
 async def generate_all_variants(
@@ -2237,10 +2311,9 @@ async def generate_all_variants(
 
     results = {ImageVariant.SQUARE: [], ImageVariant.SOCIAL: []}
 
-    # OpenAI: Generate 2 at a time (rate limit friendly)
-    # Gemini: Generate all 4 concurrently (faster)
-    concurrency = 2 if provider == Provider.OPENAI else 4
-    semaphore = asyncio.Semaphore(concurrency)
+    # All 4 variants launch concurrently per provider
+    # OpenAI: rate limiter spaces API calls; Gemini: runs in thread pool
+    semaphore = asyncio.Semaphore(4)
 
     # Generate all 4 variants concurrently (with controlled concurrency)
     tasks = [
@@ -2267,53 +2340,50 @@ async def generate_with_providers(
     providers: List[Provider],
     concept_label: str = ""
 ) -> Dict[Provider, Dict[ImageVariant, List[Path]]]:
-    """Generate 4 images per provider: 2 with Bolt only, 2 with Bolt + hosts
+    """Generate 4 images per provider concurrently: 2 with Bolt only, 2 with Bolt + hosts
 
+    Runs all providers in parallel for maximum throughput.
     Total output: 8 square + 8 social images per provider
     """
 
-    print(f"\n🖼️  Generating images...")
+    print(f"\n🖼️  Generating images (providers in parallel)...")
     print("=" * 70)
     print("Each provider will generate:")
     print("  • 2 images with Bolt only")
     print("  • 2 images with Bolt + all four hosts")
     print("  • Each in both square (3000×3000) and social (1200×630) formats")
 
-    all_results = {}
-
     # Use episode-numbered subdirectory
     output_dir = OUTPUT_DIR / str(episode_num)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    async with aiohttp.ClientSession() as session:
-        for provider in providers:
-            print(f"\n📡 {provider.value.upper()} Generation:")
-            print("-" * 70)
-
-            if provider == Provider.OPENAI and not OPENAI_API_KEY:
+    # Build list of valid providers with their API keys
+    valid_providers = []
+    for provider in providers:
+        if provider == Provider.OPENAI:
+            if not OPENAI_API_KEY:
                 print("  ⚠️  OpenAI API key not found, skipping")
                 continue
-
-            if provider == Provider.GEMINI and not GOOGLE_API_KEY:
+            valid_providers.append((provider, OPENAI_API_KEY))
+        elif provider == Provider.GEMINI:
+            if not GOOGLE_API_KEY:
                 print("  ⚠️  Google API key not found, skipping")
                 continue
+            valid_providers.append((provider, GOOGLE_API_KEY))
 
-            api_key = OPENAI_API_KEY if provider == Provider.OPENAI else GOOGLE_API_KEY
-
-            results = await generate_all_variants(
-                session,
-                api_key,
-                provider,
-                selected_concept,
-                episode_num,
-                episode_title,
-                output_dir,
-                concept_label
+    async with aiohttp.ClientSession() as session:
+        async def run_provider(provider: Provider, api_key: str):
+            print(f"\n📡 {provider.value.upper()} Generation:")
+            print("-" * 70)
+            return provider, await generate_all_variants(
+                session, api_key, provider, selected_concept,
+                episode_num, episode_title, output_dir, concept_label
             )
 
-            all_results[provider] = results
+        tasks = [run_provider(p, k) for p, k in valid_providers]
+        results = await asyncio.gather(*tasks)
 
-    return all_results
+    return {prov: res for prov, res in results}
 
 
 def save_concepts(episode_num: int, episode_title: str, concepts: List[Tuple[str, str]], selections: List[Tuple[int, str]]):
