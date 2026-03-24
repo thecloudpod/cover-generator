@@ -495,9 +495,8 @@ class ImageVariant(Enum):
 # STYLE GUIDE AND PROMPTS
 # ============================================================================
 
-BASE_STYLE_PROMPT = """Create a playful, professional podcast cover background with these characteristics:
-
-THE CLOUD POD UNIVERSE CONTEXT:
+# Shared style components - used by both providers
+UNIVERSE_CONTEXT = """THE CLOUD POD UNIVERSE CONTEXT:
 - This podcast covers cloud computing and tech industry news with humor and insight
 - The tone is always comedic and affectionate, never mean-spirited
 
@@ -506,49 +505,71 @@ BRAND CHARACTER NOTES (only include if mentioned in the concept):
 - AWS: Dominant cloud leader, professional but can be playfully corporate
 - Google Cloud: Innovation-focused, sometimes quirky
 - Azure: Enterprise-focused Microsoft cloud
-- Only include these brands if they are explicitly mentioned in the episode concept or title
+- Only include these brands if they are explicitly mentioned in the episode concept or title"""
 
-ILLUSTRATION STYLE - Modern flat vector aesthetic:
-- Visual style reference: Think Kurzgesagt, Slack marketing illustrations, or modern tech editorial art
-- Bold shapes with clean edges and smooth gradients
+ILLUSTRATION_STYLE = """ILLUSTRATION STYLE - Modern flat vector aesthetic:
+- Visual medium: Flat vector illustration in modern editorial cartoon style (Kurzgesagt, Slack marketing illustrations, tech editorial art)
+- Bold geometric shapes with clean edges and smooth color gradients
 - Simple geometric body shapes for characters (rectangles, rounded forms)
 - Minimal facial features with maximum personality (dots for eyes, simple curves for mouths)
 - Playful proportions and exaggerated scale for comedic effect
 - Soft shadows and depth through color variation, not harsh lighting
 
-CHARACTER DESIGN PRINCIPLES (when characters appear):
+MATERIALS & TEXTURE (for flat vector illustration):
+- Character bodies: Smooth matte solid colors with soft gradient shading
+- Bolt's cloud form: Cotton-like soft texture, simplified geometric shape
+- Clothing: Flat colors with minimal fold lines, matte fabric appearance
+- Backgrounds: Smooth color gradients or simple geometric patterns
+- Overall finish: Clean vector edges, no photorealistic texture detail"""
+
+CHARACTER_DESIGN = """CHARACTER DESIGN PRINCIPLES (when characters appear):
 - Distinctive silhouettes - recognizable even in black shadow
 - Simple geometric shapes for bodies (readable at any size)
 - Consistent proportions - hosts are similar scale to each other
 - Color-coded for quick identification (each character has signature color)
 - Each character has signature pose/gesture that expresses personality
-- Clean separation - no overlapping characters, clear breathing room
+- Clean separation - no overlapping characters, clear breathing room"""
 
-COLOR PALETTE:
+COLOR_PALETTE = """COLOR PALETTE:
 - Primary: Blues (#0066FF), cloud theme colors
 - Accent: White, light grays, strategic pops of color (yellow for Bolt's lightning bolt)
 - Character color-coding: Jonathan=light blue, Justin=gray, Matthew=warm brown/orange, Ryan=teal
 - Vibrant but professional - saturated blues, clean whites, purposeful color choices
-- Use color to enhance humor and guide the eye
+- Use color to enhance humor and guide the eye"""
 
-COMPOSITION & FRAMING:
+COMPOSITION_BASE = """COMPOSITION & FRAMING:
 - Primary focal point in center-to-upper area with clear visual hierarchy
 - Embrace negative space - don't fill every corner
 - Breathing room around characters and key objects
 - Characters shown as distinct stylized figures with recognizable visual signatures
-- Foreground-midground-background depth using size and color saturation
+- Foreground-midground-background depth using size and color saturation"""
+
+HUMOR_STORYTELLING = """HUMOR & STORYTELLING:
+- Embrace visual puns and literal interpretations as described in the concept
+- Exaggerate proportions for comedic effect when the concept calls for it
+- Add playful details that reward close inspection
+- Characters express personality through pose and composition
+- Render ONLY what is described in the concept"""
+
+# Legacy BASE_STYLE_PROMPT for backward compatibility (used in concept generation)
+BASE_STYLE_PROMPT = f"""Create a playful, professional podcast cover background with these characteristics:
+
+{UNIVERSE_CONTEXT}
+
+{ILLUSTRATION_STYLE}
+
+{CHARACTER_DESIGN}
+
+{COLOR_PALETTE}
+
+{COMPOSITION_BASE}
 
 TEXT IN SCENE:
 - Include story text ONLY if mentioned in the concept (readable labels, signs, dates, etc.)
 - No graphic design overlays - those are added in post-production
 - Keep scene text handwritten, natural, part of the world
 
-HUMOR & STORYTELLING:
-- Embrace visual puns and literal interpretations as described in the concept
-- Exaggerate proportions for comedic effect when the concept calls for it
-- Add playful details that reward close inspection
-- Characters express personality through pose and composition
-- Render ONLY what is described in the concept - do not add extra elements"""
+{HUMOR_STORYTELLING}"""
 
 
 # Creative lenses for concept variety - each produces a fundamentally different type of concept
@@ -782,205 +803,25 @@ Return ONLY the concept as a single concise sentence describing the visual scene
 
 
 def build_image_prompt(concept: str, variant: ImageVariant, provider: Provider = None, include_bolt: bool = False, include_hosts: bool = False) -> str:
-    """Build detailed prompt for image generation with optional model-specific emphasis
+    """Build detailed prompt for image generation with provider-specific structure
+
+    OpenAI: Background → Subject → Details → Constraints (per OpenAI cookbook)
+    Gemini: Subject → Action → Location → Composition → Style (per Google guide)
 
     Args:
         concept: The visual concept description
         variant: Square or social media format
-        provider: OpenAI or Gemini (for model-specific emphasis)
+        provider: OpenAI or Gemini (for provider-specific prompt structure)
         include_bolt: Whether to include Bolt character (user choice)
         include_hosts: Whether to include the four hosts (user choice)
     """
 
     format_type = "Square format (1:1 aspect ratio)." if variant == ImageVariant.SQUARE else "Horizontal landscape format (roughly 16:9 aspect ratio - WIDE not tall)."
 
-    dimension_guidance = f"""{format_type}
-
-⚠️ CRITICAL COMPOSITION FRAMING - READ CAREFULLY:
-The lower 25% of this image will be COMPLETELY COVERED by a text overlay bar in post-production. ANY important visual elements placed in the bottom quarter will be HIDDEN and WASTED.
-
-MANDATORY PLACEMENT RULES:
-• ALL main subjects, characters, faces, key objects: Position in UPPER 75% ONLY (top and middle areas)
-• Character faces: Must be in upper-middle to upper portion - NEVER in bottom quarter
-• Important visual elements: Keep in top 3/4 of frame - pretend the bottom 25% doesn't exist for composition purposes
-• Bottom quarter use ONLY: Simple environmental grounding (solid floors, horizon lines, gradient sky/background, atmospheric effects)
-• Think of the canvas as 75% usable space for content + 25% reserved background space
-
-COMPOSITION ANALOGY: Like a magazine cover where the bottom has the magazine title bar - all the interesting content stays ABOVE that bar.
-
-Visual weight and focal points: Upper 75% of frame. Bottom 25%: Just background fill."""
-
-    # Add Bolt guidance only if user selected it
-    bolt_guidance = ""
-    if include_bolt:
-        bolt_guidance = """
-
-BOLT - The Cloud Pod Mascot (reference image provided - match exactly):
-
-CHARACTER DESIGN:
-Body Shape: Puffy cloud form with rounded edges, roughly square proportions when at rest
-Body Color: Bright electric blue (#0066FF) - solid, no gradients on main body
-Chest Icon: Bold yellow lightning bolt (zigzag shape, pointing downward)
-Face: Simple friendly features - dot eyes (dark blue), curved smile line
-Accessories: Small rounded headphones on sides, single antenna on top with ball tip
-Style: Clean flat vector shapes, matte finish, modern illustration aesthetic
-
-PERSONALITY & POSE:
-Expression: Always friendly and approachable, enthusiastic energy
-Signature Gestures: Floating/bouncing, pointing with cloud appendages, excited poses
-Scale: Roughly 60-70% the height of human hosts when appearing together
-Consistency: Bolt's core design (blue color, lightning bolt orientation) stays identical across all scenes
-
-RENDERING PRIORITY: Match the reference image design exactly - this character must be instantly recognizable across all episodes."""
-
-    # Add hosts guidance only if user selected it
-    hosts_guidance = ""
-    if include_hosts:
-        hosts_guidance = """
-
-THE FOUR CLOUD POD HOSTS - Character Design Consistency Guide
-
-STANDARD SCENARIO: The podcast has 4 core hosts - Jonathan, Justin, Matthew, and Ryan
-- For typical scenes, render these 4 distinct individuals with their signature characteristics
-- Each host has recognizable visual signatures (hair, facial hair, outfit colors, build)
-
-CROWD/DUPLICATION SCENARIOS: When the concept requires many people (org charts, crowds, teams, armies, etc.)
-- You may duplicate the hosts to fill the scene
-- CRITICAL: Add distinguishing variations to each duplicate so they don't look identical:
-  - Accessories: glasses, hats, headphones, scarves, capes, ties, badges
-  - Props: laptops, phones, tennis rackets, canes, coffee cups, tablets
-  - Costume variations: different shirt colors/styles, jackets, hoodies, formal wear
-  - Hairstyle tweaks: different lengths, styles, colors (while maintaining base recognition)
-  - Posture variations: sitting, standing, leaning, different arm positions
-- Maintain core recognizability (Jonathan's build, Justin's bald head, Matthew's horseshoe, Ryan's wavy hair) but add visual variety
-- Think: "alternate universe versions" or "the same person in different outfits/contexts"
-- Examples:
-  - Org chart: Same bald Justin at different levels - one in suit with glasses, one in hoodie with coffee, one in blazer with tablet
-  - Crowd scene: Multiple Matthews - one with sunglasses, one with cap, one with scarf, all maintaining horseshoe hair and beard
-  - Team meeting: Duplicated Ryans - different colored sweaters (teal, navy, gray), varied gestures, one with laptop
-
-Illustration Style: Modern flat vector (Kurzgesagt/Slack aesthetic)
-Key Principle: DISTINCTIVE SILHOUETTES + COLOR CODING + VISUAL SIGNATURES
-
-SHARED DESIGN LANGUAGE:
-- Simple geometric body shapes (rounded rectangles for torsos)
-- Minimal facial features with personality (simple eyes, expressive mouths)
-- Tech-casual professional attire (each has signature outfit)
-- Similar scale to each other, all standing roughly same height
-- Light skin tone, simple flat color rendering
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-CHARACTER 1 - JONATHAN "The Welcoming Lead"
-HAIR: Dark brown, slightly wavy, medium length with side part (full head of hair)
-FACE: Clean-shaven smooth face, round friendly features, warm smile
-BUILD: Fuller/broad rectangular body shape, solid presence (tallest overall impression)
-OUTFIT: Light blue button-down shirt (sleeves rolled to elbows), khaki pants
-SIGNATURE COLOR: Light blue (#5B9BD5) - appears in shirt and accents
-SIGNATURE POSE: Upright posture, welcoming hand gestures (waving, pointing, presenting)
-PERSONALITY: Open body language, leading the group, friendly approachable energy
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-CHARACTER 2 - JUSTIN "The Distinguished Sage"
-HAIR: Completely bald head (smooth dome, subtle highlights for dimension)
-FACIAL HAIR: Silver-gray goatee (covers chin and upper lip only, neat and trimmed)
-BUILD: Robust/solid rectangular shape, broad shoulders, strong presence
-OUTFIT: Gray blazer over black t-shirt, dark jeans, smart-casual
-SIGNATURE COLOR: Gray (#808080) - appears in blazer and overall palette
-SIGNATURE POSE: Thoughtful stance - hand on chin, crossed arms, grounded stable posture
-PERSONALITY: Wise mentor energy, contemplative, authoritative but approachable
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-CHARACTER 3 - MATTHEW "The Energetic Optimist"
-HAIR: Horseshoe pattern - bald shiny dome on top, brown hair wraps around sides and back from ear to ear (render as "C" shape when viewed from front)
-FACIAL HAIR: Full scruffy brown beard (covers cheeks, chin, jawline, connects to side hair)
-BUILD: Slimmer/athletic rectangular shape, more vertical proportions, lean
-OUTFIT: Warm brown or orange polo shirt with rolled sleeves, casual pants
-SIGNATURE COLOR: Warm brown/orange (#D97B3E) - appears in shirt
-SIGNATURE POSE: Dynamic animated gestures, mid-motion, energetic pointing or jumping
-PERSONALITY: Always smiling, enthusiastic energy, most animated of the group
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-CHARACTER 4 - RYAN "The Creative Thinker"
-HAIR: Shortish wavy golden-brown hair with natural volume and texture (full head, tousled)
-FACIAL HAIR: Darker brown goatee (covers chin and upper lip, similar coverage to Justin but brown)
-BUILD: Medium balanced rectangular shape, average proportions
-OUTFIT: Teal/turquoise crew-neck sweater or henley, modern casual
-SIGNATURE COLOR: Teal (#4AAAA5) - appears in shirt/sweater
-SIGNATURE POSE: Slightly angled stance, thoughtful gestures (looking at objects, contemplating)
-PERSONALITY: Creative contemplation, often interacting with tech objects or screens
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-VISUAL IDENTIFICATION SYSTEM:
-Primary ID: Hair pattern (Justin=bald, Matthew=horseshoe/bald top, Jonathan=full dark, Ryan=wavy golden-brown)
-Secondary ID: Facial hair (Matthew=full beard, Justin=gray goatee, Ryan=brown goatee, Jonathan=clean)
-Tertiary ID: Signature color (blue, gray, orange, teal)
-Quaternary ID: Build (Jonathan=broad, Justin=solid, Matthew=lean, Ryan=balanced)
-
-GROUP COMPOSITION (when all 4 appear together):
-- Standard order left-to-right: Jonathan → Justin → Matthew → Ryan
-- Spacing: Clear breathing room between each character, no overlap
-- Scale: All roughly similar height, similar size to each other
-- Arrangement: Arc, line, or informal cluster (avoid rigid lineup unless concept calls for it)
-- Interaction: Characters react to scene elements or look at shared focal point
-- With Bolt: Mascot appears in center or floating above, roughly 60-70% of host height
-
-CONSISTENCY CHECKLIST (for standard 4-host scenes):
-✓ Can you identify each host by silhouette alone?
-✓ Is each character's signature color visible in their outfit?
-✓ Are the four hair patterns clearly distinct? (full, bald, horseshoe, wavy)
-✓ Do facial hair patterns match? (none, gray goatee, full beard, brown goatee)
-✓ Are they in recognizable left-to-right order when in group?
-✓ Does each pose match their personality archetype?
-
-DUPLICATION CHECKLIST (for crowd/org chart scenes):
-✓ If hosts are duplicated, does each copy have distinguishing features?
-✓ Are accessories/props varied across duplicates (glasses, hats, different colored shirts)?
-✓ Can you still recognize the "base" host despite variations (bald head, horseshoe hair, etc.)?
-✓ Do variations feel natural and not random?
-
-RENDERING PRIORITY: Core hosts must be instantly recognizable through their visual signatures, even when varied for crowd scenes."""
-
-    # Model-specific style emphasis
-    model_emphasis = ""
-    if provider == Provider.OPENAI:
-        model_emphasis = "\n\nOPENAI MODEL OPTIMIZATION:\n• Prioritize clean flat illustration with bold shapes and smooth color gradients\n• Leverage strong facial expression capabilities - show personality through simple expressive faces\n• Use lighting and depth to separate characters while maintaining flat aesthetic\n• Consistent proportions are key - maintain character scale relationships\n• Avoid photorealistic rendering - stay in illustration style"
-    elif provider == Provider.GEMINI:
-        # Add duplication variation reminder for Gemini
-        duplication_reminder = ""
-        if include_hosts:
-            duplication_reminder = "\n• If duplicating hosts for crowd scenes, add accessories/costume variations to each copy (glasses, different colored shirts, props, hats, etc.)"
-
-        model_emphasis = f"\n\nGEMINI MODEL OPTIMIZATION:\n• Match exact visual style and character designs from reference images provided\n• Emphasize geometric shape language - clean simple forms\n• Strong on color consistency - use signature colors to distinguish characters\n• Test silhouettes - characters should be recognizable in black shadow\n• Maintain consistent character design across entire scene{duplication_reminder}"
-
-    # Build mandatory character inclusion instruction
-    character_requirement = ""
-    if include_hosts and include_bolt:
-        character_requirement = """
-
-🎭 MANDATORY CHARACTER INCLUSION - THIS VARIANT MUST INCLUDE:
-• Bolt (the blue cloud robot mascot) - REQUIRED in this scene
-• All four podcast hosts (Jonathan, Justin, Matthew, Ryan) - REQUIRED in this scene
-
-These characters MUST appear in this image, integrated naturally into the concept described above.
-Arrange them as a group interacting with the scene elements, reacting to the situation, or participating in the visual story.
-Do not skip any characters - all five must be present and clearly visible."""
-    elif include_bolt:
-        character_requirement = """
-
-🎭 MANDATORY CHARACTER INCLUSION - THIS VARIANT MUST INCLUDE:
-• Bolt (the blue cloud robot mascot) - REQUIRED in this scene
-
-Bolt MUST appear in this image, integrated naturally into the concept."""
-
-    # Detect comic strip concepts and adjust instructions
+    # Detect comic strip concepts
     is_comic_strip = concept.strip().lower().startswith("panel 1")
 
-    # For comic strips, override the composition guidance to work with 2x2 grid
+    # Build dimension guidance based on format
     if is_comic_strip:
         dimension_guidance = f"""{format_type}
 
@@ -999,7 +840,7 @@ DEAD ZONE: The bottom ~12% of the image will be covered by a compact title overl
 - ALL four panels including panels 3 and 4 must be FULLY VISIBLE above this dead zone
 - No faces, speech bubbles, or important details in the bottom 12%
 
-TEXT IN IMAGE: ONLY render text that appears in the panel descriptions (speech bubbles, captions, on-screen labels). Do NOT render any character descriptions, instructions, or prompt text as visible text in the image."""
+TEXT IN IMAGE: ONLY render text that appears in the panel descriptions (speech bubbles, captions, on-screen labels). Place exact text in "quotes" to ensure accuracy."""
     else:
         dimension_guidance = f"""{format_type}
 
@@ -1017,26 +858,97 @@ COMPOSITION ANALOGY: Like a magazine cover where the bottom has the magazine tit
 
 Visual weight and focal points: Upper 75% of frame. Bottom 25%: Just background fill."""
 
-    # For comic strips, add a reminder not to render character descriptions as image text
-    comic_text_warning = ""
-    if is_comic_strip:
-        comic_text_warning = """
+    # Build character descriptions
+    bolt_description = """BOLT - The Cloud Pod Mascot (reference image provided - match exactly):
+CHARACTER DESIGN: Puffy cloud form with rounded edges, bright electric blue (#0066FF) solid color, bold yellow lightning bolt on chest (zigzag pointing down), dot eyes (dark blue), curved smile, small rounded headphones on sides, single antenna on top with ball tip. Clean flat vector shapes, matte finish.
+PERSONALITY: Always friendly and approachable, enthusiastic energy, floating/bouncing poses.
+SCALE: Roughly 60-70% the height of human hosts when appearing together.
+PRESERVE: Bolt's blue color (#0066FF), lightning bolt chest icon orientation, cloud body shape, headphone accessories."""
 
-TEXT RENDERING WARNING: The character descriptions below are RENDERING INSTRUCTIONS for how to draw the characters. Do NOT display any of this descriptive text in the image. Only render text that appears in speech bubbles or captions as described in the panel concept."""
+    hosts_description = """THE FOUR CLOUD POD HOSTS:
+1. JONATHAN: Dark wavy hair (full head), clean-shaven, broad build, light blue (#5B9BD5) button-down shirt, friendly/welcoming energy
+2. JUSTIN: Completely bald head, silver-gray goatee, solid build, gray (#808080) blazer over black t-shirt, wise/contemplative
+3. MATTHEW: Horseshoe hair pattern (bald top, brown hair around sides), full brown beard, lean/athletic, warm brown/orange (#D97B3E) polo, energetic/animated
+4. RYAN: Wavy golden-brown hair (full), dark brown goatee, balanced build, teal (#4AAAA5) crew-neck sweater, creative/thoughtful
+GROUP: Standard left-to-right order, clear spacing between each, similar heights, flat vector style.
+DUPLICATION: For crowd scenes, add accessories/props/color variations to duplicates while maintaining core hair/beard patterns.
+PRESERVE: Hair patterns, facial hair styles, signature outfit colors, distinctive silhouettes."""
 
-    return f"""{BASE_STYLE_PROMPT}
+    # Build character requirements
+    character_list = []
+    if include_bolt:
+        character_list.append("Bolt (blue cloud mascot)")
+    if include_hosts:
+        character_list.append("all four hosts (Jonathan, Justin, Matthew, Ryan)")
 
-SPECIFIC EPISODE CONCEPT:
-{concept}
+    character_requirement = ""
+    if character_list:
+        characters_text = " and ".join(character_list)
+        character_requirement = f"\n\nMANDATORY: This image MUST include {characters_text}, integrated naturally into the scene."
 
-CRITICAL: Render the elements described in the concept above. Do not add unrelated objects or text that are not explicitly mentioned in the concept.{character_requirement}{comic_text_warning}
-{bolt_guidance}
-{hosts_guidance}
+    #TEXT RENDERING: Enclose any visible text in "quotes" for accuracy. Example: A sign displaying "CLOUD ZONE" in bold sans-serif font."""
+    text_rendering_note = '\nTEXT RENDERING: Place exact text in "quotes" with font specification. Example: speech bubble containing "Hello!" in bold font.'
 
-COMPOSITION REQUIREMENTS:
+    # Build provider-specific prompts
+    if provider == Provider.OPENAI:
+        # OpenAI structure: Background/Scene → Subject → Details → Constraints
+        return f"""BACKGROUND/SCENE:
+{UNIVERSE_CONTEXT}
+
+{concept}{character_requirement}
+
+SUBJECT DETAILS:
+{ILLUSTRATION_STYLE if not is_comic_strip else ""}
+{CHARACTER_DESIGN}
+{COLOR_PALETTE}
+{bolt_description if include_bolt else ""}
+{hosts_description if include_hosts else ""}
+
+COMPOSITION & FRAMING:
 {dimension_guidance}
+{COMPOSITION_BASE}
+Viewpoint: Straight-on or slight low-angle for approachable feel. Element placement: Center focal point in upper 75% of frame.{text_rendering_note}
 
-Generate a background image that visualizes this concept while maintaining The Cloud Pod's professional tech aesthetic.{model_emphasis}"""
+{HUMOR_STORYTELLING}
+
+CONSTRAINTS:
+- INCLUDE ONLY: Elements described in the concept above
+- PRESERVE: Character colors, core designs, signature visual elements
+- CHANGE ONLY: Character poses and expressions based on scene requirements
+- Visual medium: Flat vector illustration in modern editorial cartoon style (Kurzgesagt aesthetic)
+- Materials: Smooth matte solid colors, soft gradient shading, clean vector edges
+- Avoid: Photorealistic textures, glossy highlights, complex lighting setups"""
+
+    else:  # GEMINI
+        # Gemini structure: Subject → Action → Location → Composition → Style
+        return f"""{concept}{character_requirement}
+
+SUBJECT & ACTION:
+{bolt_description if include_bolt else ""}
+{hosts_description if include_hosts else ""}
+
+LOCATION & SETTING:
+{UNIVERSE_CONTEXT}
+
+COMPOSITION & CAMERA:
+{dimension_guidance}
+{COMPOSITION_BASE}
+Framing: Medium shot, straight-on or slight low-angle
+Focus: Everything sharp and clear (deep focus)
+Lighting: Soft directional light from upper left, gentle shadows for depth{text_rendering_note}
+
+VISUAL STYLE:
+{ILLUSTRATION_STYLE}
+{CHARACTER_DESIGN}
+{COLOR_PALETTE}
+{HUMOR_STORYTELLING}
+
+GEMINI MODEL OPTIMIZATION:
+• Use reference images to match exact character designs
+• Emphasize geometric cartoon shapes over photorealistic details
+• Use signature colors for character identification
+• Silhouette test: characters recognizable in black shadow
+• For crowd scenes with duplicated hosts: add accessories/costume variations (glasses, different colored shirts, props, hats)"""
 
 
 # ============================================================================
