@@ -39,13 +39,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # OpenAI Models - Latest
 OPENAI_CHAT_MODEL = "gpt-5.2"  # Latest reasoning model
-OPENAI_IMAGE_MODEL = "gpt-image-1.5"  # GPT Image model with up to 16-reference support
+OPENAI_IMAGE_MODEL = "gpt-image-2"  # GPT Image 2 - flexible resolutions, improved composition
 
 # Gemini Models - Gemini 3
 GEMINI_TEXT_MODEL = "gemini-3-flash-preview"  # Latest flash with thinking_level
-GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview"  # Nano Banana Pro - 4K with up to 14 references
-# NOTE: Using Pro over Flash (Nano Banana 2) - Pro provides superior composition, character design,
-# and thinking capability for complex multi-character scenes. Update to next "Pro" model when available.
+GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview"  # Pro - 4K with up to 14 references, best composition
 
 # Anthropic Claude - Concept Generation Only (no image generation)
 ANTHROPIC_CHAT_ENDPOINT = "https://api.anthropic.com/v1/messages"
@@ -1630,13 +1628,13 @@ async def generate_image_openai(
     include_bolt: bool = False,
     include_hosts: bool = False
 ) -> Optional[bytes]:
-    """Generate image using OpenAI GPT Image 1.5 via official SDK
+    """Generate image using OpenAI GPT Image via official SDK
 
     Uses images.edit with up to 16 reference images for identity lock,
     or images.generate when no references are needed.
     """
 
-    print(f"  🎨 OpenAI GPT-Image-1.5 generating {variant.value} variant...")
+    print(f"  🎨 OpenAI {OPENAI_IMAGE_MODEL} generating {variant.value} variant...")
 
     # Rate limit to stay within OpenAI's per-minute quota
     await openai_image_limiter.wait()
@@ -1675,7 +1673,6 @@ GENERATION TASK:
                     prompt=enhanced_prompt,
                     size="1024x1024",
                     quality="high",
-                    input_fidelity="high",
                 )
             finally:
                 for f in image_files:
@@ -1759,7 +1756,7 @@ GENERATION TASK:
 
     # Call the model using SDK (blocking call)
     response = client.models.generate_content(
-        model="gemini-3-pro-image-preview",
+        model=GEMINI_IMAGE_MODEL,
         contents=contents,
         config=config,
     )
@@ -2136,12 +2133,13 @@ async def generate_single_variant(
     semaphore: asyncio.Semaphore = None,
     concept_label: str = ""
 ) -> Tuple[int, Optional[Path], Optional[Path]]:
-    """Generate a single variant (both square and social)
+    """Generate a single primary (square) variant
 
     Args:
         concept_label: Optional label to distinguish concepts in filenames (e.g. "c1", "c2")
 
-    Returns tuple of (variant_num, square_path, social_path)
+    Returns tuple of (variant_num, square_path, None) — the trailing slot is a
+    retired social-image path kept for tuple-shape compatibility.
     """
 
     if semaphore:
@@ -2184,22 +2182,17 @@ async def generate_single_variant(
         # Build filename with optional concept label for multi-select runs
         label_part = f"-{concept_label}" if concept_label else ""
 
-        # Post-process square and social variants concurrently in thread pool
+        # Post-process the primary square cover (social posts are no longer generated)
         filename = f"{episode_num}-{title_slug}{label_part}-{provider.value}-{variant_num}.jpg"
         output_path = output_dir / filename
 
-        filename_social = f"{episode_num}-{title_slug}{label_part}-social-{provider.value}-{variant_num}.jpg"
-        output_path_social = output_dir / filename_social
-
-        square_ok, social_ok = await asyncio.gather(
-            process_and_save_async(base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path, compact_bar),
-            process_and_save_async(base_image_bytes, episode_num, episode_title, ImageVariant.SOCIAL, output_path_social, compact_bar),
+        square_ok = await process_and_save_async(
+            base_image_bytes, episode_num, episode_title, ImageVariant.SQUARE, output_path, compact_bar
         )
 
         square_path = output_path if square_ok else None
-        social_path = output_path_social if social_ok else None
 
-        return (variant_num, square_path, social_path)
+        return (variant_num, square_path, None)
 
     finally:
         if semaphore:
@@ -2218,10 +2211,10 @@ async def generate_all_variants(
 ) -> Dict[ImageVariant, List[Path]]:
     """Generate 4 different images: 2 with Bolt only, 2 with Bolt + hosts
 
-    Returns both square and social variants for each (8 images total per provider)
+    Returns the primary square variants (4 images per provider)
     """
 
-    results = {ImageVariant.SQUARE: [], ImageVariant.SOCIAL: []}
+    results = {ImageVariant.SQUARE: []}
 
     # All 4 variants launch concurrently per provider
     # OpenAI: rate limiter spaces API calls; Gemini: runs in thread pool
@@ -2236,11 +2229,9 @@ async def generate_all_variants(
     variant_results = await asyncio.gather(*tasks)
 
     # Collect results in order
-    for variant_num, square_path, social_path in sorted(variant_results, key=lambda x: x[0]):
+    for variant_num, square_path, _social_path in sorted(variant_results, key=lambda x: x[0]):
         if square_path:
             results[ImageVariant.SQUARE].append(square_path)
-        if social_path:
-            results[ImageVariant.SOCIAL].append(social_path)
 
     return results
 
@@ -2255,7 +2246,7 @@ async def generate_with_providers(
     """Generate 4 images per provider concurrently: 2 with Bolt only, 2 with Bolt + hosts
 
     Runs all providers in parallel for maximum throughput.
-    Total output: 8 square + 8 social images per provider
+    Total output: 4 square (primary) images per provider
     """
 
     print(f"\n🖼️  Generating images (providers in parallel)...")
@@ -2263,7 +2254,7 @@ async def generate_with_providers(
     print("Each provider will generate:")
     print("  • 2 images with Bolt only")
     print("  • 2 images with Bolt + all four hosts")
-    print("  • Each in both square (3000×3000) and social (1200×630) formats")
+    print("  • Primary square format (3000×3000)")
 
     # Use episode-numbered subdirectory
     output_dir = OUTPUT_DIR / str(episode_num)
@@ -2343,6 +2334,35 @@ def save_concepts(episode_num: int, episode_title: str, concepts: List[Tuple[str
         raise e
 
 
+def load_existing_concepts(episode_num: int) -> Optional[Tuple[str, List[Tuple[str, str]]]]:
+    """Load previously saved concepts for an episode if they exist.
+
+    Returns:
+        Tuple of (title, concepts) where concepts is a list of (concept_text, provider_name) tuples,
+        or None if no saved concepts exist for this episode.
+    """
+    episode_dir = OUTPUT_DIR / str(episode_num)
+    concepts_file = episode_dir / f"{episode_num}-concepts.json"
+
+    if not concepts_file.exists():
+        return None
+
+    try:
+        with open(concepts_file, 'r') as f:
+            data = json.load(f)
+
+        title = data.get("title", "")
+        concepts = [(c["concept"], c["provider"]) for c in data.get("concepts", [])]
+
+        if not concepts:
+            return None
+
+        return (title, concepts)
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        logger.warning(f"Failed to load existing concepts: {e}")
+        return None
+
+
 def print_summary(
     episode_num: int,
     episode_title: str,
@@ -2417,12 +2437,21 @@ def parse_args():
         choices=[1, 2, 3, 4, 5, 6],
         help='Pre-select concept number (1-6) (for testing)'
     )
+    parser.add_argument(
+        '--reuse',
+        action='store_true',
+        help='Reuse previously saved concepts if they exist (skip idea generation)'
+    )
 
     return parser.parse_args()
 
 
 def get_interactive_input(args):
-    """Get missing arguments interactively with validation"""
+    """Get missing arguments interactively with validation
+
+    When an episode number with existing concepts is detected, offers to reuse
+    previously generated ideas instead of starting from scratch.
+    """
 
     # Episode number
     if args.episode is None:
@@ -2441,18 +2470,53 @@ def get_interactive_input(args):
             except ValueError:
                 print("❌ Please enter a valid number")
 
-    # Episode title
-    if args.title is None:
+    # Check for existing concepts (rerun detection)
+    existing = load_existing_concepts(args.episode)
+    reuse_concepts = False
+
+    if existing and not args.skip_concepts and not args.concept:
+        existing_title, existing_concepts_list = existing
+        print(f"\n📂 Found existing concepts for episode {args.episode}: \"{existing_title}\"")
+        print(f"   {len(existing_concepts_list)} concept(s) saved from a previous run\n")
+        print("  R) Reuse previous concepts (skip idea generation)")
+        print("  N) Generate new concepts from scratch")
+        print("  X) Exit")
         while True:
-            title_input = input("Episode title: ").strip()
-            if not title_input:
-                print("❌ Episode title is required")
-                continue
-            if validate_title(title_input):
-                args.title = title_input
+            choice = input("\n  Your choice: ").strip().upper()
+            if choice == 'R':
+                reuse_concepts = True
                 break
+            elif choice == 'N':
+                reuse_concepts = False
+                break
+            elif choice == 'X':
+                print("\n👋 Exiting...")
+                sys.exit(0)
             else:
-                print(f"❌ Title must be 1-{MAX_TITLE_LENGTH} characters")
+                print("  Please enter R, N, or X")
+
+    # Episode title - auto-fill from saved concepts if reusing
+    if args.title is None:
+        if reuse_concepts and existing:
+            # Auto-fill title from saved concepts
+            args.title = existing_title
+            print(f"\n  ✓ Using saved title: \"{args.title}\"")
+        else:
+            while True:
+                title_input = input("Episode title: ").strip()
+                if not title_input:
+                    print("❌ Episode title is required")
+                    continue
+                if validate_title(title_input):
+                    args.title = title_input
+                    break
+                else:
+                    print(f"❌ Title must be 1-{MAX_TITLE_LENGTH} characters")
+
+    # Store reuse flag on args for main() to check
+    args.reuse_concepts = reuse_concepts
+    if reuse_concepts and existing:
+        args._existing_concepts = existing_concepts_list
 
     return args
 
@@ -2502,8 +2566,47 @@ async def main():
         concept_providers.append("Anthropic")
     print(f"Concept Providers: {', '.join(concept_providers)}")
 
-    # Phase 1: Generate concepts (with regeneration loop)
-    if args.skip_concepts:
+    # Determine if reusing saved concepts
+    reuse_concepts = getattr(args, 'reuse_concepts', False) or getattr(args, 'reuse', False)
+    existing_concepts = getattr(args, '_existing_concepts', None)
+
+    # If --reuse flag is set but interactive detection didn't run, load concepts now
+    if reuse_concepts and not existing_concepts:
+        loaded = load_existing_concepts(args.episode)
+        if loaded:
+            existing_concepts = loaded[1]
+            args._existing_concepts = existing_concepts
+            # Auto-fill title from saved concepts if not provided
+            if not args.title:
+                args.title = loaded[0]
+                print(f"  ✓ Using saved title: \"{args.title}\"")
+        else:
+            print(f"\n⚠️  No saved concepts found for episode {args.episode}, generating new ones")
+            reuse_concepts = False
+
+    # Phase 1: Generate or reuse concepts
+    if reuse_concepts and existing_concepts:
+        # Reuse previously saved concepts
+        concepts = existing_concepts
+        print(f"\n♻️  Reusing {len(concepts)} saved concepts for episode {args.episode}")
+        print("=" * 70)
+
+        # Present concepts for selection (same interactive flow as new concepts)
+        selections, should_regenerate = await present_concepts_and_choose(concepts, args.title)
+
+        if should_regenerate:
+            # User chose to regenerate from the selection menu — generate fresh
+            print("\n🔄 Generating new concepts instead...")
+            while True:
+                concepts = await generate_concepts(args.title)
+                if not concepts:
+                    print("\n❌ Concept generation failed. Exiting.")
+                    sys.exit(1)
+                selections, should_regenerate = await present_concepts_and_choose(concepts, args.title)
+                if not should_regenerate:
+                    break
+
+    elif args.skip_concepts:
         # Create dummy concepts for testing (one per lens)
         concepts = [(f"Test concept {i+1} for {args.title} [{lens['label']}]", "Test")
                     for i, lens in enumerate(CREATIVE_LENSES)]
